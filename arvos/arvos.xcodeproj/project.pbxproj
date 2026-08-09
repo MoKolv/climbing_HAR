@@ -1,0 +1,594 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2A91EA782EC3DEC2000EBD56 /* arvosWatchApp.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 2A91EA6E2EC3DEC1000EBD56 /* arvosWatchApp.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		2AFADA382EC671CC0053A9B8 /* GRPC in Frameworks */ = {isa = PBXBuildFile; productRef = D0C8F1D02F455BE500A1D210 /* GRPC */; };
+		2AFADA392EC671CC0053A9B8 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = D0C8F1D12F455BE500A1D210 /* SwiftProtobuf */; };
+		3FF2D11F2EC6F75B009B34B2 /* arvosWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FF2D11A2EC6F75B009B34B2 /* arvosWatchApp.swift */; };
+		3FF2D1202EC6F75B009B34B2 /* WatchContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FF2D11B2EC6F75B009B34B2 /* WatchContentView.swift */; };
+		3FF2D1212EC6F75B009B34B2 /* WatchSensorService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FF2D11C2EC6F75B009B34B2 /* WatchSensorService.swift */; };
+		3FF2D1232EC6F75B009B34B2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3FF2D11D2EC6F75B009B34B2 /* Assets.xcassets */; };
+		3FF2D2012EC6FBF2009B34B2 /* WatchSensorPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FF2D1FB2EC6FBF2009B34B2 /* WatchSensorPacket.swift */; };
+		3FF2D2032EC6FBF2009B34B2 /* WatchConnectivityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FF2D1FC2EC6FBF2009B34B2 /* WatchConnectivityService.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		2A91EA762EC3DEC2000EBD56 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2AB6540F2EBD65FC007FBEFB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2A91EA6D2EC3DEC1000EBD56;
+			remoteInfo = arvosWatchApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		2A91EA7C2EC3DEC2000EBD56 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				2A91EA782EC3DEC2000EBD56 /* arvosWatchApp.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		2A91EA6E2EC3DEC1000EBD56 /* arvosWatchApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = arvosWatchApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2AB654172EBD65FC007FBEFB /* arvos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = arvos.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3FF2D11A2EC6F75B009B34B2 /* arvosWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = arvosWatchApp.swift; sourceTree = "<group>"; };
+		3FF2D11B2EC6F75B009B34B2 /* WatchContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchContentView.swift; sourceTree = "<group>"; };
+		3FF2D11C2EC6F75B009B34B2 /* WatchSensorService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSensorService.swift; sourceTree = "<group>"; };
+		3FF2D11D2EC6F75B009B34B2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		3FF2D11E2EC6F75B009B34B2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		3FF2D1FB2EC6FBF2009B34B2 /* WatchSensorPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSensorPacket.swift; sourceTree = "<group>"; };
+		3FF2D1FC2EC6FBF2009B34B2 /* WatchConnectivityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchConnectivityService.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		2A336EA02ECA8696000BEB6D /* Exceptions for "arvos" folder in "arvosWatchApp" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Splash.mp4,
+			);
+			target = 2A91EA6D2EC3DEC1000EBD56 /* arvosWatchApp */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		2AB654192EBD65FC007FBEFB /* arvos */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				2A336EA02ECA8696000BEB6D /* Exceptions for "arvos" folder in "arvosWatchApp" target */,
+			);
+			path = arvos;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		2A91EA6B2EC3DEC1000EBD56 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2AB654142EBD65FC007FBEFB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2AFADA392EC671CC0053A9B8 /* SwiftProtobuf in Frameworks */,
+				2AFADA382EC671CC0053A9B8 /* GRPC in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		2AB6540E2EBD65FC007FBEFB = {
+			isa = PBXGroup;
+			children = (
+				2AB654192EBD65FC007FBEFB /* arvos */,
+				3FF2D1F72EC6FBF2009B34B2 /* arvos/Shared */,
+				3FF2D1192EC6F75B009B34B2 /* arvosWatchApp */,
+				2AB654182EBD65FC007FBEFB /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		2AB654182EBD65FC007FBEFB /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				2AB654172EBD65FC007FBEFB /* arvos.app */,
+				2A91EA6E2EC3DEC1000EBD56 /* arvosWatchApp.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		3FF2D1192EC6F75B009B34B2 /* arvosWatchApp */ = {
+			isa = PBXGroup;
+			children = (
+				3FF2D11A2EC6F75B009B34B2 /* arvosWatchApp.swift */,
+				3FF2D11B2EC6F75B009B34B2 /* WatchContentView.swift */,
+				3FF2D11C2EC6F75B009B34B2 /* WatchSensorService.swift */,
+				3FF2D11D2EC6F75B009B34B2 /* Assets.xcassets */,
+				3FF2D11E2EC6F75B009B34B2 /* Info.plist */,
+			);
+			path = arvosWatchApp;
+			sourceTree = "<group>";
+		};
+		3FF2D1F72EC6FBF2009B34B2 /* arvos/Shared */ = {
+			isa = PBXGroup;
+			children = (
+				3FF2D1F82EC6FBF2009B34B2 /* Models */,
+				3FF2D1FA2EC6FBF2009B34B2 /* Services */,
+			);
+			path = arvos/Shared;
+			sourceTree = "<group>";
+		};
+		3FF2D1F82EC6FBF2009B34B2 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				3FF2D1FB2EC6FBF2009B34B2 /* WatchSensorPacket.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		3FF2D1FA2EC6FBF2009B34B2 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				3FF2D1FC2EC6FBF2009B34B2 /* WatchConnectivityService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2A91EA6D2EC3DEC1000EBD56 /* arvosWatchApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2A91EA792EC3DEC2000EBD56 /* Build configuration list for PBXNativeTarget "arvosWatchApp" */;
+			buildPhases = (
+				2A91EA6A2EC3DEC1000EBD56 /* Sources */,
+				2A91EA6B2EC3DEC1000EBD56 /* Frameworks */,
+				2A91EA6C2EC3DEC1000EBD56 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = arvosWatchApp;
+			packageProductDependencies = (
+			);
+			productName = arvosWatchApp;
+			productReference = 2A91EA6E2EC3DEC1000EBD56 /* arvosWatchApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		2AB654162EBD65FC007FBEFB /* arvos */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2AB654222EBD65FE007FBEFB /* Build configuration list for PBXNativeTarget "arvos" */;
+			buildPhases = (
+				2AB654132EBD65FC007FBEFB /* Sources */,
+				2AB654142EBD65FC007FBEFB /* Frameworks */,
+				2AB654152EBD65FC007FBEFB /* Resources */,
+				2A91EA7C2EC3DEC2000EBD56 /* Embed Watch Content */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2A91EA772EC3DEC2000EBD56 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				2AB654192EBD65FC007FBEFB /* arvos */,
+			);
+			name = arvos;
+			packageProductDependencies = (
+				D0C8F1D02F455BE500A1D210 /* GRPC */,
+				D0C8F1D12F455BE500A1D210 /* SwiftProtobuf */,
+			);
+			productName = arvos;
+			productReference = 2AB654172EBD65FC007FBEFB /* arvos.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		2AB6540F2EBD65FC007FBEFB /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2610;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					2A91EA6D2EC3DEC1000EBD56 = {
+						CreatedOnToolsVersion = 26.1;
+					};
+					2AB654162EBD65FC007FBEFB = {
+						CreatedOnToolsVersion = 26.1;
+					};
+				};
+			};
+			buildConfigurationList = 2AB654122EBD65FC007FBEFB /* Build configuration list for PBXProject "arvos" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 2AB6540E2EBD65FC007FBEFB;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				D0C8F1CE2F455BE500A1D210 /* XCRemoteSwiftPackageReference "grpc-swift" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 2AB654182EBD65FC007FBEFB /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				2AB654162EBD65FC007FBEFB /* arvos */,
+				2A91EA6D2EC3DEC1000EBD56 /* arvosWatchApp */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		2A91EA6C2EC3DEC1000EBD56 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3FF2D1232EC6F75B009B34B2 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2AB654152EBD65FC007FBEFB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		2A91EA6A2EC3DEC1000EBD56 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3FF2D1212EC6F75B009B34B2 /* WatchSensorService.swift in Sources */,
+				3FF2D1202EC6F75B009B34B2 /* WatchContentView.swift in Sources */,
+				3FF2D11F2EC6F75B009B34B2 /* arvosWatchApp.swift in Sources */,
+				3FF2D2012EC6FBF2009B34B2 /* WatchSensorPacket.swift in Sources */,
+				3FF2D2032EC6FBF2009B34B2 /* WatchConnectivityService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2AB654132EBD65FC007FBEFB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		2A91EA772EC3DEC2000EBD56 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2A91EA6D2EC3DEC1000EBD56 /* arvosWatchApp */;
+			targetProxy = 2A91EA762EC3DEC2000EBD56 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2A91EA7A2EC3DEC2000EBD56 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MHM2AFNTW9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = arvosWatchApp/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moritzkolvenbach.arvos.watch;
+				PRODUCT_NAME = arvosWatchApp;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.6;
+			};
+			name = Debug;
+		};
+		2A91EA7B2EC3DEC2000EBD56 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MHM2AFNTW9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = arvosWatchApp/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moritzkolvenbach.arvos.watch;
+				PRODUCT_NAME = arvosWatchApp;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.6;
+			};
+			name = Release;
+		};
+		2AB654202EBD65FE007FBEFB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 58WX73LXKV;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		2AB654212EBD65FE007FBEFB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 58WX73LXKV;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		2AB654232EBD65FE007FBEFB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = arvos/arvos.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MHM2AFNTW9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moritzkolvenbach.arvos;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		2AB654242EBD65FE007FBEFB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = arvos/arvos.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MHM2AFNTW9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moritzkolvenbach.arvos;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2A91EA792EC3DEC2000EBD56 /* Build configuration list for PBXNativeTarget "arvosWatchApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2A91EA7A2EC3DEC2000EBD56 /* Debug */,
+				2A91EA7B2EC3DEC2000EBD56 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2AB654122EBD65FC007FBEFB /* Build configuration list for PBXProject "arvos" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2AB654202EBD65FE007FBEFB /* Debug */,
+				2AB654212EBD65FE007FBEFB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2AB654222EBD65FE007FBEFB /* Build configuration list for PBXNativeTarget "arvos" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2AB654232EBD65FE007FBEFB /* Debug */,
+				2AB654242EBD65FE007FBEFB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D0C8F1CE2F455BE500A1D210 /* XCRemoteSwiftPackageReference "grpc-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/grpc/grpc-swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.20.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D0C8F1D02F455BE500A1D210 /* GRPC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D0C8F1CE2F455BE500A1D210 /* XCRemoteSwiftPackageReference "grpc-swift" */;
+			productName = GRPC;
+		};
+		D0C8F1D12F455BE500A1D210 /* SwiftProtobuf */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D0C8F1CE2F455BE500A1D210 /* XCRemoteSwiftPackageReference "grpc-swift" */;
+			productName = SwiftProtobuf;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 2AB6540F2EBD65FC007FBEFB /* Project object */;
+}

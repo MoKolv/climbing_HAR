@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARVOS - AR Sensor Streaming</title>
+    <link rel="stylesheet" href="css/tesla-style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        /* Index page specific styles */
+        .landing-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-dark);
+        }
+
+        .landing-content {
+            max-width: 600px;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .landing-logo {
+            font-size: 48px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            color: var(--text-primary);
+            margin-bottom: 10px;
+        }
+
+        .landing-tagline {
+            font-size: 14px;
+            color: var(--text-secondary);
+            letter-spacing: 1px;
+            margin-bottom: 50px;
+        }
+
+        .steps {
+            display: flex;
+            gap: 30px;
+            margin-bottom: 40px;
+            justify-content: center;
+        }
+
+        .step {
+            flex: 1;
+            max-width: 150px;
+        }
+
+        .step-number {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--accent-blue);
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 18px;
+            margin: 0 auto 12px;
+        }
+
+        .step p {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        .qr-section {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+        #qrcode {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 15px;
+        }
+
+        #qrcode img {
+            border-radius: 8px;
+        }
+
+        .connection-url {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-family: 'Monaco', 'Courier New', monospace;
+            background: var(--bg-dark);
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .port-config {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .port-config label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+
+        .port-config input {
+            background: var(--bg-dark);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            width: 80px;
+            text-align: center;
+        }
+
+        .port-config button {
+            background: var(--accent-blue);
+            border: none;
+            color: var(--text-primary);
+            padding: 6px 16px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            letter-spacing: 0.5px;
+        }
+
+        .port-config button:hover {
+            background: #2563eb;
+        }
+
+        .start-button {
+            background: var(--accent-blue);
+            border: none;
+            color: var(--text-primary);
+            padding: 14px 40px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+            letter-spacing: 1px;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .start-button:hover {
+            background: #2563eb;
+            transform: translateY(-2px);
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 40px;
+        }
+
+        .feature-item {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            text-align: left;
+        }
+
+        .feature-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--accent-blue);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+
+        .feature-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 5px;
+            letter-spacing: 0.5px;
+        }
+
+        .feature-desc {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="landing-container">
+        <div class="landing-content">
+            <div class="landing-logo">ARVOS</div>
+            <div class="landing-tagline">STREAM IPHONE SENSORS TO YOUR BROWSER</div>
+
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <p>Open ARVOS app on iPhone</p>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <p>Scan QR code below</p>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <p>See live data instantly</p>
+                </div>
+            </div>
+
+            <div class="qr-section">
+                <div id="qrcode"></div>
+                <div class="connection-url" id="connectionUrl">Generating QR code...</div>
+
+                <div class="port-config">
+                    <label>PORT</label>
+                    <input type="number" id="customPort" value="8765" min="1024" max="65535">
+                    <button onclick="detectLocalIP()">REFRESH</button>
+                </div>
+            </div>
+
+            <button class="start-button" onclick="goToViewer()">
+                <span>OPEN VIEWER</span>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+
+            <div class="features">
+                <div class="feature-item">
+                    <div class="feature-icon">🎯</div>
+                    <div class="feature-title">3D POINT CLOUDS</div>
+                    <div class="feature-desc">Real-time LiDAR visualization in your browser</div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">📹</div>
+                    <div class="feature-title">LIVE CAMERA</div>
+                    <div class="feature-desc">High-quality video streaming</div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">🗺️</div>
+                    <div class="feature-title">GPS TRACKING</div>
+                    <div class="feature-desc">Real-time location and path display</div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">📊</div>
+                    <div class="feature-title">IMU SENSORS</div>
+                    <div class="feature-desc">Motion tracking visualization</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/qr-generator.js"></script>
+</body>
+</html>
