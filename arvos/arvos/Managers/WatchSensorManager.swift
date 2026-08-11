@@ -55,7 +55,6 @@ class WatchSensorManager: ObservableObject {
     private let initialSyncSpacingSeconds: TimeInterval = 0.4
     private let initialSyncTimeoutSeconds: TimeInterval = 0.3
     
-    private let initialMacAcceptableRTTNs: UInt64 = 300_000_000 //300ms
     
     private enum TimeSyncMode {
         case initialBurst

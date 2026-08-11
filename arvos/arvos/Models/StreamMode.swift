@@ -191,15 +191,15 @@ enum StreamMode: String, Codable, CaseIterable, Identifiable {
             return ModeConfiguration(
                 cameraEnabled: true,
                 cameraFPS: 30,
-                depthEnabled: true,
+                depthEnabled: false,
                 depthFPS: 10,
                 imuEnabled: true,
                 imuHz: 200,
-                poseEnabled: true,
+                poseEnabled: false,
                 poseHz: 60,
                 gpsEnabled: false,
                 watchEnabled: true,
-                watchHz: 50,
+                watchHz: 100 ,
                 recordingEnabled: false,
                 autoDuration: nil
             )

@@ -189,7 +189,7 @@ class WatchSensorService: ObservableObject {
     private func handleMotionUpdate(_ motion: CMDeviceMotion) {
         // Create timestamp (nanoseconds since reference date)
         let timestamp = UInt64(motion.timestamp * 1_000_000_000)
-    
+        
         // Extract IMU data
         let angularVelocity = SIMD3<Double>(
             motion.rotationRate.x,
