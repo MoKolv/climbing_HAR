@@ -22,7 +22,7 @@ import numpy as np
 
 async def main():
     # create output directory
-    output_dir = Path(f"data/arvos_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    output_dir = Path(f"../Data/arvos_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     output_dir.mkdir(exist_ok=True)
 
     print (f"saving data to: {output_dir}")
@@ -32,13 +32,14 @@ async def main():
     watch_imu_file = open(output_dir / "watch_imu.csv", "w", newline="")
     watch_attitude_file = open(output_dir / "watch_attitude.csv", "w", newline="")
     video_metadata_file = open(output_dir / "video_metadata.csv", "w", newline ="")
+    sync_file = open(output_dir / "watch_sync.csv", "w", newline ="")
 
     # video writer
     video_writer = None
     frame_count = 0
 
     """
-    pass alt_host= "192.168.178.2" when hosting over fritz box network
+    pass opealt_host= "192.168.178.2" when hosting over fritz box network
     otherwise omitt host/alt_host argument
     """
     server = ArvosServer(alt_host= "192.168.178.2", port=9090)
@@ -75,6 +76,21 @@ async def main():
         "timestamp_s",
         "frame_count"
     ])
+
+    sync_writer = csv.writer(sync_file, delimiter= ";")
+    sync_writer.writerow([
+        "trial_id",
+        "phase",
+        "offset_ns",
+        "phone_anchor_ns",
+        "watch_anchor_ns",
+        "min_rtt_ns",
+        "median_selected_rtt_ns",
+        "offset_spread_ns",
+        "valid_sample_count",
+        "selected_sample_count",
+        "boundary_phone_ns",
+    ])
     
     # create stop_event to cancle listening and program
     stop_event = asyncio.Event()
@@ -82,6 +98,13 @@ async def main():
     # state booleans
     state = RecordingState()
 
+    pre_sync_event = asyncio.Event()
+    post_sync_event = asyncio.Event()
+
+    pre_sync_result = None
+    post_sync_result = None
+
+    trial_id = 0
 
     # terminal feedback functions
     async def quit_program(_: PromptInput):
@@ -89,11 +112,64 @@ async def main():
         stop_event.set()
     
     async def start_stop_recording(_: PromptInput):
-        state.recording = not state.recording
-        if state.recording:
-            print("\n 🔴 Started recording ")
-        else:
-            print("\n ⬜ Stopped recording ")
+        nonlocal \
+            trial_id, \
+            pre_sync_result, \
+            post_sync_result
+
+        # Start
+        if not state.recording:
+            trial_id += 1
+
+            pre_sync_result = None
+            post_sync_result = None
+
+            pre_sync_event.clear()
+            post_sync_event.clear()
+
+            print(
+                f"\n Preparing trial"
+                f"{trial_id}"
+            )
+
+            await server.send_command("prepare_trial_sync")
+
+            try:
+                await asyncio.wait_for(
+                    pre_sync_event.wait(),
+                    timeout=15.0
+                )
+            except asyncio.TimeoutError:
+                print("Pre-sync timed out")
+                return
+
+            state.recording = True
+
+            print("\n🔴 Started recording")
+
+            #STOP
+
+            print("\n⬜ Stopping recording" )
+
+            post_sync_event.clear()
+
+            await server.send_command("post_trial_sync")
+
+            try:
+                await asyncio.wait_for(
+                    post_sync_event.wait(),
+                    timeout=15.0
+                )
+
+            except asyncio.TimeoutError:
+                print("Post-sync timed out")
+                return
+
+            state.recording = False
+
+            print("\n✅ Trial complete")
+
+
 
     # mark data
     async def mark_hold_change(_: PromptInput):
@@ -285,8 +361,64 @@ async def main():
     async def on_disconnect(client_id: str):
         state.imu_phone_connected = False
         state.video_phone_connected = False
-        
-        
+
+    async def on_watch_sync_result(data:dict):
+
+        nonlocal \
+            pre_sync_result, \
+            post_sync_result
+
+        phase = data["phase"]
+
+        print(
+            f"\n Watch {phase.upper()}"
+            f"sync complete"
+        )
+
+        print(
+            f"offset: "
+            f"{data['offset_ns']}"
+        )
+
+        print(
+            f"minimum RTT: "
+            f"{data['min_rtt_ns'] / 1e6:.2f} ms"
+        )
+
+        print(
+            f"offset spread: "
+            f"{data['offset_spread_ns'] / 1e6:.2f} ms"
+        )
+
+        sync_writer.writerow([
+            trial_id,
+
+            phase,
+            data["offset_ns"],
+            data["phone_anchor_ns"],
+            data["watch_anchor_ns"],
+
+            data["min_rtt_ns"],
+            data["median_selected_rtt_ns"],
+            data["offset_spread_ns"],
+
+            data["valid_sample_count"],
+            data["selected_sample_count"],
+
+            data["boundary_phone_ns"],
+        ])
+
+        sync_file.flush()
+
+        if phase == "pre":
+            pre_sync_result = data
+            pre_sync_event.set()
+
+        elif phase == "post":
+            post_sync_result = data
+            post_sync_event.set()
+
+
     # setup handlers
     server.on_imu = on_imu
     server.on_watch_imu = on_watch_imu
@@ -295,29 +427,31 @@ async def main():
     server.on_camera = on_camera
     server.on_connect = on_connect
     server.on_disconnect = on_disconnect
-    
+    server.on_watch_sync_result = on_watch_sync_result
+
     print("🚀 Starting server...")
-    
+
     server_task = asyncio.create_task(server.start())
     keyboard_task = asyncio.create_task(listen_for_keys(key_handlers, stop_event))
-    
+
     try:
         await stop_event.wait()
-        
+
     except KeyboardInterrupt:
         print("\n\n👋 Stopping...")
-        
+
     finally:
         print("\n 💾 Saving files...")
-        
+
         keyboard_task.cancel()
         server_task.cancel()
-        
+
         await asyncio.gather(server_task, keyboard_task, return_exceptions=True)
-        
+
         imu_file.close()
         video_metadata_file.close()
-        
+        sync_file.close()
+
         if video_writer is not None:
             video_writer.release()
 

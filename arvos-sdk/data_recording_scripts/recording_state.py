@@ -2,7 +2,7 @@
 data_class for structuring recording_states of the collectin of participant climbing-data
 
 """
-
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path

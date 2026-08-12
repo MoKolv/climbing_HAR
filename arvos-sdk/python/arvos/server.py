@@ -53,6 +53,7 @@ class ArvosServer:
         self.on_watch_imu = None
         self.on_watch_attitude = None
         self.on_watch_activity = None
+        self.on_watch_sync_result = None
 
     def get_local_ip(self) -> str:
         """
@@ -155,6 +156,31 @@ class ArvosServer:
                 self.latest_handshake = None
 
     async def _delegate_message(self, message):
+
+        """Handle time_sync message"""
+        if isinstance(message, str):
+            try:
+                data = json.loads(message)
+            except json.JSONDecodeError:
+                data = None
+
+            if isinstance(data, dict):
+                message_type = (
+                    data.get("type")
+                    or data.get("sensorType")
+                )
+
+                if message_type == "watch_sync_result":
+
+                    if self.on_watch_sync_result:
+                        result = self.on_watch_sync_result(
+                            data
+                        )
+                        if asyncio.iscoroutine(result):
+                            await result
+
+                    return
+
         """Delegate message to appropriate handler"""
         # Import client handlers to reuse parsing logic
         from .client import ArvosClient
@@ -185,6 +211,23 @@ class ArvosServer:
                 *[client.send(message) for client in self.clients],
                 return_exceptions=True
             )
+
+    async def send_command(self, command: str, **parameters):
+        """Send a command to connected Arvos clients"""
+
+        message = {
+            "type": "command",
+            "command": command,
+            **parameters,
+        }
+
+        if not self.clients:
+            raise RuntimeError(
+                "Cannot send command: "
+                "no Arvos client connected"
+            )
+
+        await self.broadcast(json.dumps(message))
 
     async def send_to_client(self, websocket: websockets.WebSocketServerProtocol, message: str):
         """Send message to specific client"""
