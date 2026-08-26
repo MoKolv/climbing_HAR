@@ -31,6 +31,9 @@ async def main():
     output_dir = data_root / f"arvos_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     output_dir.mkdir(exist_ok=True, parents=True)
 
+    pending_dir = output_dir / ".pending_trials"
+    pending_dir.mkdir(exist_ok=True)
+
     print (f"saving data to: {output_dir}")
 
     # create csv files
@@ -40,7 +43,6 @@ async def main():
     video_metadata_file = open(output_dir / "video_metadata.csv", "w", newline ="")
     sync_file = open(output_dir / "watch_sync.csv", "w", newline ="")
 
-    # video writer
 
     FLUSH_EVERY_ROWS = 100
     FLUSH_EVERY_SECONDS = 0.5
@@ -111,7 +113,13 @@ async def main():
         "selected_sample_count",
         "boundary_phone_ns",
     ])
-    
+
+    final_writers = {
+        "imu": imu_writer,
+        "watch_imu": watch_imu_writer,
+        "watch_attitude": watch_attitude_writer,
+    }
+
     # create stop_event to cancle listening and program
     stop_event = asyncio.Event()
 
@@ -124,7 +132,66 @@ async def main():
     pre_sync_result = None
     post_sync_result = None
 
+    trial_spools = {}
+    active_pre_boundary_ns = None
+    last_sensor_arrival = monotonic()
+
     trial_id = 0
+    active_trial_id = None
+
+    def open_trial_spools(current_trial_id: int) -> None:
+        trial_spools.clear()
+
+        for stream_name in final_writers:
+            path = pending_dir / f"trial_{current_trial_id}_{stream_name}.csv"
+            file = open(path, "w", newline="")
+            writer = csv.writer(file, delimiter=";")
+            trial_spools[stream_name] = (path, file, writer)
+
+    def stage_row(stream_name: str, timestamp_ns: int, row: list) -> None:
+        if active_trial_id is None or active_pre_boundary_ns is None:
+            return
+
+        # reject delayed packets from before trial
+        if timestamp_ns < active_pre_boundary_ns:
+            return
+
+        _, _, writer = trial_spools[stream_name]
+        writer.writerow(row)
+
+    async def wait_for_sensor_drain(quiet_seconds: float = 0.25, maximum_wait_seconds: float = 2.0) -> None:
+        deadline = monotonic() + maximum_wait_seconds
+
+        while monotonic() < deadline:
+            if monotonic() - last_sensor_arrival >= quiet_seconds:
+                return
+            await asyncio.sleep(0.05)
+
+    def finalize_trial(post_boundary_ns: int) -> None:
+        nonlocal active_trial_id, active_pre_boundary_ns
+
+        if active_pre_boundary_ns is None:
+            return
+
+        for stream_name, (path, file, _) in trial_spools.items():
+            file.flush()
+            file.close()
+
+            with open(path, newline="") as staged_file:
+                reader = csv.reader(staged_file, delimiter=";")
+
+                for row in reader:
+                    timestamp_ns = int(row[0])
+
+                    if active_pre_boundary_ns <= timestamp_ns <= post_boundary_ns:
+                        final_writers[stream_name].writerow(row)
+                        flush_helper(stream_name)
+            path.unlink(missing_ok=True)
+
+        trial_spools.clear()
+        active_trial_id = None
+        active_pre_boundary_ns = None
+
 
     # terminal feedback functions
     async def quit_program(_: PromptInput):
@@ -135,7 +202,9 @@ async def main():
         nonlocal \
             trial_id, \
             pre_sync_result, \
-            post_sync_result
+            post_sync_result, \
+            active_trial_id, \
+            active_pre_boundary_ns
 
         # Start
         if not state.recording:
@@ -165,8 +234,13 @@ async def main():
                 print("Pre-sync failed")
                 return
 
-            await server.send_command("start_streaming")
+
+            active_trial_id = trial_id
+            active_pre_boundary_ns = int(pre_sync_result["boundaryPhoneNs"])
+            open_trial_spools(trial_id)
+
             state.recording = True
+            await server.send_command("start_streaming")
 
             print("\n🔴 Started recording")
             return
@@ -197,6 +271,10 @@ async def main():
             print("Post-sync failed")
             return
 
+        await wait_for_sensor_drain()
+
+        post_boundary_ns = int(post_sync_result["boundaryPhoneNs"])
+        finalize_trial(post_boundary_ns)
 
         print("\n✅ Trial complete")
 
@@ -311,47 +389,50 @@ async def main():
 
     # Handle IMU data
     async def on_imu(data: IMUData):
+        nonlocal last_sensor_arrival
+
         state.mark_received("phone_imu")
-        if not state.recording:
-            return
-        imu_writer.writerow([
-            data.timestamp_ns, data.timestamp_s,
+        last_sensor_arrival = monotonic()
+
+        stage_row("imu", data.timestamp_ns, [
+            data.timestamp_ns,
+            data.timestamp_s,
             *data.angular_velocity,
             *data.linear_acceleration,
             *(data.gravity if data.gravity else (0, 0, 0)),
         ])
-        flush_helper("imu")
 
     async def on_watch_imu(data: WatchIMUData):
-        state.mark_received("watch_imu")
-        if not state.recording:
-            return
+        nonlocal last_sensor_arrival
 
-        watch_imu_writer.writerow([
-            data.timestamp_ns, data.timestamp_s,
-            data.watch_timestamp_ns, data.phone_received_timestamp_ns,
+        state.mark_received("watch_imu")
+        last_sensor_arrival = monotonic()
+        stage_row("watch_imu", data.timestamp_ns, [
+            data.timestamp_ns,
+            data.timestamp_s,
+            data.watch_timestamp_ns,
+            data.phone_received_timestamp_ns,
             *data.angular_velocity,
             *data.linear_acceleration,
         ])
-        flush_helper("watch_imu")
-
 
     async def on_watch_attitude(data: WatchAttitudeData):
-        state.mark_received("watch_attitude")
-        if not state.recording:
-            return
+        nonlocal last_sensor_arrival
 
-        watch_attitude_writer.writerow([
-            data.timestamp_ns, data.timestamp_s,
-            data.watch_timestamp_ns, data.phone_received_timestamp_ns,
+        state.mark_received("watch_attitude")
+        last_sensor_arrival = monotonic()
+
+        stage_row("watch_attitude", data.timestamp_ns, [
+            data.timestamp_ns,
+            data.timestamp_s,
+            data.watch_timestamp_ns,
+            data.phone_received_timestamp_ns,
             *data.quaternion,
             data.roll,
             data.pitch,
             data.yaw,
-            data.reference_frame
-            #*(data.attitude if data.attitude else (0, 0, 0)),
+            data.reference_frame,
         ])
-        flush_helper("watch_attitude")
 
     async def on_watch_activity(data: WatchMotionActivityData):
         print("received watch_activity")

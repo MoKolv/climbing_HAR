@@ -86,7 +86,7 @@ class WatchSensorManager: ObservableObject {
     private var syncBurstSamples: [TimeSyncSample] = []
     
     private let syncSpacingSeconds: TimeInterval = 0.25
-    private let timeSyncTimeoutSeconds: TimeInterval = 1.0
+    private let timeSyncTimeoutSeconds: TimeInterval = 2.0
     private let syncAttemptCount = 15
     private let selectedSyncSampleCount = 5
     

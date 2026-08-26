@@ -29,9 +29,12 @@ class WatchConnectivityService: NSObject, ObservableObject {
     private let queueLock = NSLock()
     private var flushTimer: Timer?
     
-    private let liveBatchSize = 20
-    private let liveFlushInterval: TimeInterval = 0.05
+    private let liveBatchSize = 50
+    private let liveFlushInterval: TimeInterval = 0.02
     private let backgroundFlushInterval: TimeInterval = 1.0
+    
+    private var liveBatchInFlight = false
+    private var sensorGeneration: UInt64 = 0
     
     // Statistics
     @Published private(set) var messagesSent: Int = 0
@@ -123,6 +126,7 @@ class WatchConnectivityService: NSObject, ObservableObject {
     func discardBufferedSensorPackers() {
         
         queueLock.lock()
+        sensorGeneration &+= 1
         
         let droppedCount = messageQueue.count
         
@@ -197,17 +201,34 @@ class WatchConnectivityService: NSObject, ObservableObject {
             ]
             
             if useLiveMessage {
-                session.sendMessage(message, replyHandler: nil) { [weak self] error in
-                    guard let self else {return}
-                    
-                    guard !self.isPhoneReachable else { return }
-                    
-                    self.queueLock.lock()
-                    self.messageQueue.insert(contentsOf: packetsToSend, at: 0)
-                    self.queueLock.unlock()
-                    
-                    self.scheduleFlush()
+                queueLock.lock()
+
+                guard !liveBatchInFlight else {
+                    queueLock.unlock()
+                    return
                 }
+
+                liveBatchInFlight = true
+                let generation = sensorGeneration
+
+                queueLock.unlock()
+
+                session.sendMessage(
+                    message,
+                    replyHandler: { [weak self] _ in
+                        DispatchQueue.main.async {
+                            self?.finishLiveBatch(generation: generation)
+                        }
+                    },
+                    errorHandler: { [weak self] _ in
+                        DispatchQueue.main.async {
+                            self?.finishLiveBatch(
+                                generation: generation,
+                                failedPackets: packetsToSend
+                            )
+                        }
+                    }
+                )
             } else {
                 session.transferUserInfo(message)
             }
@@ -223,6 +244,23 @@ class WatchConnectivityService: NSObject, ObservableObject {
         }
         
         if hasMore {
+            scheduleFlush()
+        }
+    }
+    
+    private func finishLiveBatch(generation: UInt64, failedPackets: [WatchSensorPacket] = []) {
+        queueLock.lock()
+        
+        liveBatchInFlight = false
+        
+        if !failedPackets.isEmpty && generation == sensorGeneration {
+            messageQueue.insert(contentsOf: failedPackets, at: 0)
+        }
+        
+        let shouldFlushAgain = !messageQueue.isEmpty
+        queueLock.unlock()
+        
+        if shouldFlushAgain {
             scheduleFlush()
         }
     }
