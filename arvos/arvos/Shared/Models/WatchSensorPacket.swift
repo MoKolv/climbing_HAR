@@ -12,11 +12,13 @@ import simd
 /// Packet containing sensor data from Apple Watch
 struct WatchSensorPacket: Codable {
     let timestampNs: UInt64
+    let sequenceId: UInt64
     let sensorType: String
     let data: Data
     
+    
     /// Create an IMU packet from watch sensor data
-    static func imu(timestamp: UInt64, angularVelocity: SIMD3<Double>, linearAcceleration: SIMD3<Double>, gravity: SIMD3<Double>) -> WatchSensorPacket? {
+    static func imu(timestamp: UInt64, sequenceId: UInt64, angularVelocity: SIMD3<Double>, linearAcceleration: SIMD3<Double>, gravity: SIMD3<Double>) -> WatchSensorPacket? {
         let imuData = WatchIMUData(
             angularVelocity: angularVelocity,
             linearAcceleration: linearAcceleration,
@@ -31,13 +33,14 @@ struct WatchSensorPacket: Codable {
 
         return WatchSensorPacket(
             timestampNs: timestamp,
+            sequenceId: sequenceId,
             sensorType: "watch_imu",
             data: encoded
         )
     }
     
     /// Create an attitude packet from watch pose data
-    static func attitude(timestamp: UInt64, quaternion: SIMD4<Double>, pitch: Double, roll: Double, yaw: Double, referenceFrame: String) -> WatchSensorPacket? {
+    static func attitude(timestamp: UInt64, sequenceId: UInt64, quaternion: SIMD4<Double>, pitch: Double, roll: Double, yaw: Double, referenceFrame: String) -> WatchSensorPacket? {
         let attitude = WatchAttitudeData(
             quaternion: quaternion,
             pitch: pitch,
@@ -54,6 +57,7 @@ struct WatchSensorPacket: Codable {
 
         return WatchSensorPacket(
             timestampNs: timestamp,
+            sequenceId: sequenceId,
             sensorType: "watch_attitude",
             data: encoded
         )
@@ -69,6 +73,7 @@ struct WatchSensorPacket: Codable {
 
         return WatchSensorPacket(
             timestampNs: timestamp,
+            sequenceId: 0,
             sensorType: "watch_activity",
             data: encoded
         )

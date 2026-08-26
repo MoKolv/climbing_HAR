@@ -553,6 +553,7 @@ extension WatchSensorManager: WatchConnectivityDelegate {
             let payload = WatchIMUNetworkData(
                 timestampNs: adjustedTimestamp,
                 sensorType: "watch_imu",
+                sequenceId: packet.sequenceId,
                 watchTimestampNs: rawWatchTimestampNs,
                 phoneReceivedTimestampNs: phoneReceiveTimestampNs,
                 angularVelocity: watchIMU.angularVelocity,
@@ -579,6 +580,7 @@ extension WatchSensorManager: WatchConnectivityDelegate {
             let payload = WatchAttitudeNetworkData(
                 timestampNs: adjustedTimestamp,
                 sensorType: "watch_attitude",
+                sequenceId: packet.sequenceId,
                 watchTimestampNs: rawWatchTimestampNs,
                 phoneReceivedTimestampNs: phoneReceiveTimestampNs,
                 quaternion: attitude.quaternion,

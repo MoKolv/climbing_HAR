@@ -122,6 +122,7 @@ class ArvosClient:
                 if self.on_imu:
                     imu_data = IMUData(
                         timestamp_ns=data["timestampNs"],
+                        sequence_id=data["sequenceId"],
                         angular_velocity=tuple(data["angularVelocity"]),
                         linear_acceleration=tuple(data["linearAcceleration"]),
                         magnetic_field=tuple(data.get("magneticField")) if data.get("magneticField") else None,
@@ -176,6 +177,7 @@ class ArvosClient:
                 if self.on_watch_imu:
                     watch_imu_data = WatchIMUData(
                         timestamp_ns=data["timestampNs"],
+                        sequence_id= data["sequenceId"],
                         watch_timestamp_ns=data["watchTimestampNs"],
                         phone_received_timestamp_ns=data["phoneReceivedTimestampNs"],
                         angular_velocity=tuple(data["angularVelocity"]),
@@ -190,6 +192,7 @@ class ArvosClient:
                 if self.on_watch_attitude:
                     watch_attitude_data = WatchAttitudeData(
                         timestamp_ns=data["timestampNs"],
+                        sequence_id=data["sequenceId"],
                         watch_timestamp_ns= data["watchTimestampNs"],
                         phone_received_timestamp_ns= data["phoneReceivedTimestampNs"],
                         sensor_type=data["sensorType"],

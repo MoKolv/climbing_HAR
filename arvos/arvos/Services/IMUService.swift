@@ -21,6 +21,10 @@ class IMUService {
     private let operationQueue = OperationQueue()
 
     private var isRunning = false
+    
+    private let sequenceLock = NSLock()
+    private var nextSequenceId: UInt64 = 0
+    
     private var targetHz: Int = 100
     private var updateInterval: TimeInterval = 0.01 // 100 Hz
 
@@ -50,6 +54,8 @@ class IMUService {
 
     func start() {
         guard motionManager.isDeviceMotionAvailable, !isRunning else { return }
+        
+        resetSequence()
 
         motionManager.startDeviceMotionUpdates(
             using: .xArbitraryCorrectedZVertical,
@@ -65,7 +71,8 @@ class IMUService {
             guard let motion = motion else { return }
 
             let timestamp = Constants.Time.now()
-            let imuData = IMUData(timestamp: timestamp, motion: motion)
+            let sequenceId = self.takeNextSequenceId()
+            let imuData = IMUData(timestamp: timestamp, sequenceId: sequenceId, motion: motion)
 
             self.delegate?.imuService(self, didUpdate: imuData)
         }
@@ -95,6 +102,21 @@ class IMUService {
         if wasRunning {
             start()
         }
+    }
+    
+    private func resetSequence() {
+        sequenceLock.lock()
+        nextSequenceId = 0
+        sequenceLock.unlock()
+    }
+    
+    private func takeNextSequenceId() -> UInt64 {
+        sequenceLock.lock()
+        defer { sequenceLock.unlock() }
+        
+        let sequenceId = nextSequenceId
+        nextSequenceId &+= 1
+        return sequenceId
     }
 
     // MARK: - Additional Data (Optional)

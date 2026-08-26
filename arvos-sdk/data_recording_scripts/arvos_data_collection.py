@@ -20,6 +20,7 @@ from PIL import Image
 import io
 import cv2
 import numpy as np
+from statistics import median
 
 async def main():
     # create output directory
@@ -42,7 +43,7 @@ async def main():
     watch_attitude_file = open(output_dir / "watch_attitude.csv", "w", newline="")
     video_metadata_file = open(output_dir / "video_metadata.csv", "w", newline ="")
     sync_file = open(output_dir / "watch_sync.csv", "w", newline ="")
-
+    validation_file = open(output_dir / "stream_validation.csv", "w", newline ="")
 
     FLUSH_EVERY_ROWS = 100
     FLUSH_EVERY_SECONDS = 0.5
@@ -69,7 +70,7 @@ async def main():
     # create csv writers
     imu_writer = csv.writer(imu_file, delimiter=";")
     imu_writer.writerow([
-        "timestamp_ns", "timestamp_s",
+        "trial_id", "sequence_id","timestamp_ns", "timestamp_s",
         "ang_vel_x", "ang_vel_y", "ang_vel_z",
         "lin_acc_x", "lin_acc_y", "lin_acc_z",
         "gravity_x", "gravity_y", "gravity_z",
@@ -77,7 +78,7 @@ async def main():
 
     watch_imu_writer = csv.writer(watch_imu_file, delimiter=";")
     watch_imu_writer.writerow([
-        "timestamp_ns", "timestamp_s",
+        "trial_id", "sequence_id", "timestamp_ns", "timestamp_s",
         "watch_timestamp_ns", "phone_received_timestamp_ns",
         "ang_vel_x", "ang_vel_y", "ang_vel_z",
         "lin_acc_x", "lin_acc_y", "lin_acc_z",
@@ -85,7 +86,7 @@ async def main():
 
     watch_attitude_writer = csv.writer(watch_attitude_file, delimiter=";")
     watch_attitude_writer.writerow([
-        "timestamp_ns", "timestamp_s",
+        "trial_id", "sequence_id", "timestamp_ns", "timestamp_s",
         "watch_timestamp_ns", "phone_received_timestamp_ns",
         "quaternion_x", "quaternion_y", "quaternion_z", "quaternion_w",
         "roll", "pitch", "yaw",
@@ -112,6 +113,24 @@ async def main():
         "valid_sample_count",
         "selected_sample_count",
         "boundary_phone_ns",
+    ])
+
+    validation_writer = csv.writer(validation_file, delimiter=";")
+    validation_writer.writerow([
+        "trial_id",
+        "stream",
+        "pre_boundary_ns",
+        "post_boundary_ns",
+        "stored_rows",
+        "first_squence_id",
+        "last_squence_id",
+        "missing_internal_sequences",
+        "duplicate_sequences",
+        "non_monotonic_sequences",
+        "median_dt_ns",
+        "max_dt_ns",
+        "min_dt_ns",
+        "max_gap_multiple",
     ])
 
     final_writers = {
@@ -157,7 +176,7 @@ async def main():
             return
 
         _, _, writer = trial_spools[stream_name]
-        writer.writerow(row)
+        writer.writerow([active_trial_id, *row])
 
     async def wait_for_sensor_drain(quiet_seconds: float = 0.25, maximum_wait_seconds: float = 2.0) -> None:
         deadline = monotonic() + maximum_wait_seconds
@@ -166,6 +185,71 @@ async def main():
             if monotonic() - last_sensor_arrival >= quiet_seconds:
                 return
             await asyncio.sleep(0.05)
+
+    def write_stream_validation(
+            stream_name: str,
+            pre_boundary_ns: int,
+            post_boundary_ns: int,
+            rows: list [list[str]]
+    ) -> None:
+        sequence_and_time = [
+            (int(row[1]), int(row[2]))
+            for row in rows
+        ]
+
+        if not sequence_and_time:
+            validation_writer.writerow([
+                active_trial_id, stream_name, pre_boundary_ns, post_boundary_ns, 0, "", "", 0, 0, 0, "", "", "",
+            ])
+            validation_writer.flush()
+            return
+
+        sequence_and_time.sort()
+        sequence_ids = [item[0] for item in sequence_and_time]
+        timestamps = [item[1] for item in sequence_and_time]
+
+        unique_ids = sorted(set(sequence_ids))
+        missing_internal = sum(
+            right - left - 1
+            for left, right, in zip(unique_ids, unique_ids[1:])
+        )
+
+        duplicates = len(sequence_ids) - len(unique_ids)
+
+        timestamp_deltas = [
+            right - left
+            for left, right in zip(timestamps, timestamps[1:])
+            if right > left
+        ]
+
+        non_monotonic = sum(
+            right <= left
+            for left, right in zip(timestamps, timestamps[1:])
+        )
+
+        median_dt = median(timestamp_deltas) if timestamp_deltas else 0
+        min_dt = min(timestamp_deltas, default=0)
+        max_dt = max(timestamp_deltas, default=0)
+        max_gap_multiple = max_dt / median_dt if median_dt else 0
+
+        validation_writer.writerow([
+            active_trial_id,
+            stream_name,
+            pre_boundary_ns,
+            post_boundary_ns,
+            len(rows),
+            unique_ids[0],
+            unique_ids[-1],
+            missing_internal,
+            duplicates,
+            non_monotonic,
+            int(median_dt),
+            int(max_dt),
+            int(min_dt),
+            f"{max_gap_multiple:.3f}",
+        ])
+
+        validation_file.flush()
 
     def finalize_trial(post_boundary_ns: int) -> None:
         nonlocal active_trial_id, active_pre_boundary_ns
@@ -177,15 +261,25 @@ async def main():
             file.flush()
             file.close()
 
+            accepted_rows = []
             with open(path, newline="") as staged_file:
                 reader = csv.reader(staged_file, delimiter=";")
 
                 for row in reader:
-                    timestamp_ns = int(row[0])
+                    timestamp_ns = int(row[2])
 
                     if active_pre_boundary_ns <= timestamp_ns <= post_boundary_ns:
                         final_writers[stream_name].writerow(row)
                         flush_helper(stream_name)
+                        accepted_rows.append(row)
+
+            write_stream_validation(
+                stream_name,
+                active_pre_boundary_ns,
+                post_boundary_ns,
+                accepted_rows,
+            )
+
             path.unlink(missing_ok=True)
 
         trial_spools.clear()
@@ -395,6 +489,7 @@ async def main():
         last_sensor_arrival = monotonic()
 
         stage_row("imu", data.timestamp_ns, [
+            data.sequence_id,
             data.timestamp_ns,
             data.timestamp_s,
             *data.angular_velocity,
@@ -408,6 +503,7 @@ async def main():
         state.mark_received("watch_imu")
         last_sensor_arrival = monotonic()
         stage_row("watch_imu", data.timestamp_ns, [
+            data.sequence_id,
             data.timestamp_ns,
             data.timestamp_s,
             data.watch_timestamp_ns,
@@ -423,6 +519,7 @@ async def main():
         last_sensor_arrival = monotonic()
 
         stage_row("watch_attitude", data.timestamp_ns, [
+            data.sequence_id,
             data.timestamp_ns,
             data.timestamp_s,
             data.watch_timestamp_ns,
@@ -587,6 +684,7 @@ async def main():
         video_metadata_file.close()
         sync_file.close()
         sync_file.close()
+        validation_file.close()
 
         if video_writer is not None:
             video_writer.release()

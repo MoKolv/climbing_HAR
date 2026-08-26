@@ -41,6 +41,7 @@ class WatchSensorService: ObservableObject {
     private var isMotionCaptureRunninging = false
     private var resumeCaptureAfterSyncPause = false
     private var sensorTransmissionPaused = false
+    private var nextMotionSequenceId: UInt64 = 0
 
     
     
@@ -215,6 +216,7 @@ class WatchSensorService: ObservableObject {
         targetHz = min(hz, 100) // Cap at 100Hz for watch
         motionManager.deviceMotionUpdateInterval = updateInterval
         
+        nextMotionSequenceId = 0
         startMotionCapture()
         
         DispatchQueue.main.async {
@@ -266,6 +268,8 @@ class WatchSensorService: ObservableObject {
         guard !sensorTransmissionPaused else { return }
         // Create timestamp (nanoseconds since reference date)
         let timestamp = UInt64(motion.timestamp * 1_000_000_000)
+        let sequencId = nextMotionSequenceId
+        nextMotionSequenceId &+= 1
         
         // Extract IMU data
         let angularVelocity = SIMD3<Double>(
@@ -289,6 +293,7 @@ class WatchSensorService: ObservableObject {
         // Create packet
         guard let packet = WatchSensorPacket.imu(
             timestamp: timestamp,
+            sequenceId: sequencId,
             angularVelocity: angularVelocity,
             linearAcceleration: linearAcceleration,
             gravity: gravity
@@ -311,6 +316,7 @@ class WatchSensorService: ObservableObject {
         )
         guard let attitudePacket = WatchSensorPacket.attitude(
             timestamp: timestamp,
+            sequenceId: sequencId,
             quaternion: quaternion,
             pitch: attitude.pitch,
             roll: attitude.roll,

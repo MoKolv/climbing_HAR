@@ -25,6 +25,7 @@ protocol SensorData: Codable {
 struct IMUData: SensorData {
     let timestampNs: UInt64
     let sensorType: String
+    let sequenceId: UInt64
 
     /// Angular velocity in rad/s (x, y, z)
     let angularVelocity: SIMD3<Double>
@@ -35,9 +36,10 @@ struct IMUData: SensorData {
     /// Gravity vector in m/s² (for calibration reference)
     let gravity: SIMD3<Double>
 
-    init(timestamp: UInt64, motion: CMDeviceMotion) {
+    init(timestamp: UInt64, sequenceId: UInt64, motion: CMDeviceMotion) {
         self.timestampNs = timestamp
         self.sensorType = "imu"
+        self.sequenceId = sequenceId
         self.angularVelocity = SIMD3(
             motion.rotationRate.x,
             motion.rotationRate.y,
@@ -56,17 +58,19 @@ struct IMUData: SensorData {
     }
     
     // Initializer for watch_imu data
-    init(timestampNs: UInt64, sensorType: String = "imu", angularVelocity: SIMD3<Double>, linearAcceleration: SIMD3<Double>, gravity: SIMD3<Double> = SIMD3<Double>(0,0, -9.81)) {
+    init(timestampNs: UInt64, sequenceId: UInt64 = 0, sensorType: String = "imu", angularVelocity: SIMD3<Double>, linearAcceleration: SIMD3<Double>, gravity: SIMD3<Double> = SIMD3<Double>(0,0, -9.81)) {
         
         self.timestampNs = timestampNs
         self.sensorType = sensorType
         self.angularVelocity = angularVelocity
         self.linearAcceleration = linearAcceleration
         self.gravity = gravity
+        self.sequenceId = sequenceId
     }
 
     // Memberwise initializer for custom use
-    init(timestampNs: UInt64, angularVelocity: SIMD3<Double>, linearAcceleration: SIMD3<Double>, gravity: SIMD3<Double> = SIMD3(0, 0, -9.81)) {
+    init(timestampNs: UInt64, sequenceId: UInt64, angularVelocity: SIMD3<Double>, linearAcceleration: SIMD3<Double>, gravity: SIMD3<Double> = SIMD3(0, 0, -9.81)) {
+        self.sequenceId = sequenceId
         self.timestampNs = timestampNs
         self.sensorType = "imu"
         self.angularVelocity = angularVelocity
@@ -80,6 +84,7 @@ struct IMUData: SensorData {
 struct WatchIMUNetworkData: SensorData {
     let timestampNs: UInt64 // adjusted to phone domain
     let sensorType: String
+    let sequenceId: UInt64
     
     let watchTimestampNs: UInt64 // raw watch timestamp
     let phoneReceivedTimestampNs: UInt64 // iPhone receive timestamp
@@ -92,7 +97,8 @@ struct WatchIMUNetworkData: SensorData {
 
 struct WatchAttitudeNetworkData: SensorData {
     let timestampNs: UInt64 // adjusted to phone domain
-    let sensorType: String 
+    let sensorType: String
+    let sequenceId: UInt64
     
     let watchTimestampNs: UInt64  // raw watch timestamp
     let phoneReceivedTimestampNs: UInt64 // iPhone receive timestamp

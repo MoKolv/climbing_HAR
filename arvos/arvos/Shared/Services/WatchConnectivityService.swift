@@ -179,18 +179,31 @@ class WatchConnectivityService: NSObject, ObservableObject {
         
         queueLock.lock()
         
+        if useLiveMessage && liveBatchInFlight {
+            queueLock.unlock()
+            return
+        }
+        
         let batchCount = useLiveMessage
-            ? min(liveBatchSize, messageQueue.count)
-            : messageQueue.count
+        ? min(liveBatchSize, messageQueue.count)
+        : messageQueue.count
+        
+        guard batchCount > 0 else {
+            queueLock.unlock()
+            return
+        }
         
         let packetsToSend = Array(messageQueue.prefix(batchCount))
         messageQueue.removeFirst(batchCount)
         
         let hasMore = !messageQueue.isEmpty
+        let generation = sensorGeneration
+        
+        if useLiveMessage {
+            liveBatchInFlight = true
+        }
         
         queueLock.unlock()
-        
-        guard !packetsToSend.isEmpty else { return }
         
         // Use transferUserInfo for background delivery
         do {
@@ -201,18 +214,6 @@ class WatchConnectivityService: NSObject, ObservableObject {
             ]
             
             if useLiveMessage {
-                queueLock.lock()
-
-                guard !liveBatchInFlight else {
-                    queueLock.unlock()
-                    return
-                }
-
-                liveBatchInFlight = true
-                let generation = sensorGeneration
-
-                queueLock.unlock()
-
                 session.sendMessage(
                     message,
                     replyHandler: { [weak self] _ in
@@ -235,18 +236,30 @@ class WatchConnectivityService: NSObject, ObservableObject {
             
             updateSendStatistics(messages: packetsToSend.count, bytes: Int64(encoded.count))
             
-            
+            if hasMore && !useLiveMessage {
+                scheduleFlush()
+            }
         } catch {
             // Re-buffer the packets
             queueLock.lock()
-            messageQueue.insert(contentsOf: packetsToSend, at: 0)
+            
+            if useLiveMessage {
+                liveBatchInFlight = false
+            }
+            
+            if generation == sensorGeneration {
+                messageQueue.insert(contentsOf: packetsToSend, at: 0)
+            }
+            
+            let shouldFlushAgain = !messageQueue.isEmpty
             queueLock.unlock()
-        }
-        
-        if hasMore {
-            scheduleFlush()
+            
+            if shouldFlushAgain {
+                scheduleFlush()
+            }
         }
     }
+
     
     private func finishLiveBatch(generation: UInt64, failedPackets: [WatchSensorPacket] = []) {
         queueLock.lock()

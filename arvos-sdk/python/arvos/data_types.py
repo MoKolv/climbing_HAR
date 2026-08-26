@@ -11,6 +11,7 @@ import numpy as np
 class IMUData:
     """IMU (accelerometer + gyroscope) data"""
     timestamp_ns: int
+    sequence_id: int
     angular_velocity: Tuple[float, float, float]  # rad/s (x, y, z)
     linear_acceleration: Tuple[float, float, float]  # m/s² (x, y, z)
     magnetic_field: Optional[Tuple[float, float, float]] = None  # μT (x, y, z)
@@ -303,6 +304,7 @@ class HandshakeMessage:
 class WatchIMUData:
     """Apple Watch IMU data (accelerometer + gyroscope + gravity)"""
     timestamp_ns: int
+    sequence_id: int
     watch_timestamp_ns: int
     phone_received_timestamp_ns: int
     angular_velocity: Tuple[float, float, float]  # rad/s (x, y, z)
@@ -334,6 +336,7 @@ class WatchIMUData:
 class WatchAttitudeData:
     """Apple Watch attitude (orientation) data"""
     timestamp_ns: int
+    sequence_id: int
     watch_timestamp_ns: int
     phone_received_timestamp_ns: int
     quaternion: Tuple[float, float, float, float]  # x, y, z, w
