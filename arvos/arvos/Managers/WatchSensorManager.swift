@@ -13,6 +13,22 @@ protocol WatchSensorManagerDelegate: AnyObject {
     func watchSensorManager(_ manager: WatchSensorManager, didReceiveAttitude data: WatchAttitudeNetworkData)
 }
 
+struct WatchTimeSyncResult {
+    let phase: String
+    
+    let offsetNs: Int64
+    
+    let phoneAnchorNs: UInt64
+    let watchAnchorNs: UInt64
+    
+    let minRTTNs: UInt64
+    let medianSelectedRTTNs: UInt64
+    let offsetSpreadNs: UInt64
+    
+    let validSampleCount: Int
+    let selectedSampleCount: Int
+}
+
 class WatchSensorManager: ObservableObject {
     static let shared = WatchSensorManager()
     
@@ -32,44 +48,52 @@ class WatchSensorManager: ObservableObject {
     private var sampleTimestamps: [TimeInterval] = []
     private let fpsWindow: TimeInterval = 1.0
     
-    // Time synchronization
-    private var timeOffsetNs: Int64 = 0 // Offset between watch and phone clocks
-    private var lastSyncTime: Date?
-    
     // watch/phone time sync variables
-    private var watchToPhoneOffsetNs: Int64?
-    private var lastSyncRTTNs: UInt64?
-    private var syncSequence: UInt64 = 0
-    private var timeSyncTimer: Timer?
-    private var pendingTimeSyncId: UInt64?
-    private var pendingPhoneSendNs: UInt64?
-    private let timeSyncQueue = DispatchQueue(label: "watch.timeSync.queue")
-    private let timeSyncTimeoutSeconds: TimeInterval = 0.3
-    
-    private var initialSyncCompletion: (() -> Void)?
-    private var initialSyncAttemptsRemaining = 0
-    private var initialSyncBestOffsetNs: Int64?
-    private var initialSyncBestRTTNs: UInt64?
-    
-    private let initialSyncAttemptCount = 8
-    private let initialSyncSpacingSeconds: TimeInterval = 0.4
-    private let initialSyncTimeoutSeconds: TimeInterval = 0.3
-    
-    
-    private enum TimeSyncMode {
-        case initialBurst
-        case normal
+    // time sync struct
+    private struct TimeSyncSample{
+        let syncId: UInt64
+        
+        let phoneSendNs: UInt64
+        let watchReceiveNs: UInt64
+        let watchSendNs: UInt64
+        let phoneReceiveNs: UInt64
+        
+        let rttNs: UInt64
+        let estimatedOffsetNs: Int64
+        
+        var phoneAnchorNs: UInt64 {
+            phoneSendNs + (phoneReceiveNs - phoneSendNs) / 2
+        }
+        
+        var watchAnchorNs: UInt64 {
+            watchReceiveNs + (watchSendNs - watchReceiveNs) / 2
+        }
     }
     
+    private var watchToPhoneOffsetNs: Int64?
+    private var lastSyncRTTNs: UInt64?
     
+    private var syncSequence: UInt64 = 0
+    private var pendingTimeSyncId: UInt64?
+    private var pendingPhoneSendNs: UInt64?
+    private var currentSyncPhase = "unknown"
     
-    // max round trip delay 100ms atm
-    private var bestRTTNs: UInt64?
-    private let initialMaxAcceptableRTTNs: UInt64 = 1_000_000_000
-    private let normalMaxAcceptableRTTNs: UInt64 = 100_000_000
-    private let offsetSmoothingFactor: Double = 0.2
+    private let timeSyncQueue = DispatchQueue(label: "watch.timeSync.queue")
+    private var syncBurstCompletion: ((WatchTimeSyncResult?) -> Void)?
     
-    // time sync variables
+    private var initialSyncCompletion: (() -> Void)? //
+    private var syncAttemptsRemaining = 0
+    private var syncBurstSamples: [TimeSyncSample] = []
+    
+    private let syncSpacingSeconds: TimeInterval = 0.25
+    private let timeSyncTimeoutSeconds: TimeInterval = 1.0
+    private let syncAttemptCount = 15
+    private let selectedSyncSampleCount = 5
+    
+    private var isTrialSyncinProgress = false
+    private var pendingStopAfterTrialSync = false
+
+
     
     
     private init() {
@@ -103,48 +127,35 @@ class WatchSensorManager: ObservableObject {
         
         guard !isWatchStreaming else { return }
         
-        resetTimeSyncState()
+        print("Sending start_streaming command to watch")
         
-        runInitialTimeSyncBurst {[weak self] in
-            guard let self = self else {
-                print("Initial sync completeion entered, but self is nil")
-                return
-            }
-            
-            print("initial sync completion entered")
-            print("watchToPhoneOffsetNs =", self.watchToPhoneOffsetNs.map(String.init) ?? "nil")
-            
-            guard self.watchToPhoneOffsetNs != nil else {
-                print("Could not start Watch streaming: no valid time sync offset")
-                return
-            }
-            
-            print("sending start_streaming command to Watch")
-            
-            self.connectivityService.sendCommand("start_streaming", parameters: ["hz": hz])
-            
-            self.isWatchStreaming = true
-            self.watchSampleCount = 0
-            self.sampleTimestamps.removeAll()
-            
-            print("Watch streaming started after initial time syns")
-            
-        }
-       
+        connectivityService.sendCommand("start_streaming", parameters: ["hz": hz])
+        
+        isWatchStreaming = true
+        watchSampleCount = 0
+        sampleTimestamps.removeAll()
+        
+        print("watch streaming started")
     }
     
     func stopWatchStreaming() {
         guard isWatchStreaming else { return }
         
+        
+        if isTrialSyncinProgress {
+            print("Deferring stop_streaming until trial sync completes")
+            pendingStopAfterTrialSync = true
+            return
+        }
+        
         connectivityService.sendCommand("stop_streaming")
         isWatchStreaming = false
         watchHz = 0
-        stopTimeSyncTimer()
-        
     }
     
     func updateWatchFrequency(_ hz: Int) {
         guard isWatchStreaming else { return }
+
         connectivityService.sendCommand("update_frequency", parameters: ["hz": hz])
     }
     
@@ -154,10 +165,11 @@ class WatchSensorManager: ObservableObject {
         Constants.Time.now()
     }
     
-    private func performTimeSync(mode: TimeSyncMode) {
+    private func performTimeSync(completion: @escaping () -> Void) {
         
         guard pendingTimeSyncId == nil else {
-            print("Skipping time sync because id \(pendingTimeSyncId!) is still pending")
+            print("Skipping time sync because another request is still pending")
+            completion()
             return
         }
         
@@ -171,42 +183,50 @@ class WatchSensorManager: ObservableObject {
         
         print("📱 Sending timeSync id=\(syncSequence), phoneSendNs=\(phoneSendNs)")
         
-        // send time_sync to watch
+        var finished = false
+        let finishOnce: () -> Void = {
+            [weak self] in guard !finished else { return }
+            finished = true
+            self?.pendingTimeSyncId = nil
+            self?.pendingPhoneSendNs = nil
+            completion()
+        }
+        
         let sent = connectivityService.sendTimeSync(
             syncId: syncId,
             phoneSendNs: phoneSendNs,
             replyHandler: {[weak self] reply in
-                DispatchQueue.main.async {self?.handleTimeSyncReply(reply, mode:mode)}},
-            errorHandler: {[weak self] error in
+                DispatchQueue.main.async {
+                    self?.handleTimeSyncReply(reply)
+                    finishOnce()
+                }
+            },
+            
+            errorHandler: { error in
                 DispatchQueue.main.async {
                     print("time_sync error:", error)
-                    self?.pendingTimeSyncId = nil
-                    self?.pendingPhoneSendNs = nil
+                    finishOnce()
                 }
             }
         )
         
-        // reset pending timesyncs if time_sync message to watch failed
-        if !sent {
-            pendingTimeSyncId = nil
-            pendingPhoneSendNs = nil
+        guard sent else {
+            finishOnce()
             return
         }
         
-        // timeout if message takes to long
-        timeSyncQueue.asyncAfter(deadline: .now() + timeSyncTimeoutSeconds) { [weak self] in
-            DispatchQueue.main.async {
-                guard let self = self else {return}
-                
-                if self.pendingTimeSyncId == syncId {
-                    print("time_sync id: \(syncId) timed out")
-                    self.pendingTimeSyncId = nil
-                    self.pendingPhoneSendNs = nil
-                }
-            }}
+        timeSyncQueue.asyncAfter(deadline: .now() + timeSyncTimeoutSeconds) {
+            [weak self] in DispatchQueue.main.async {
+                guard let self else { return }
+                guard self.pendingTimeSyncId == syncId else { return }
+                print("time_sync id \(syncId) timed out)")
+                finishOnce()            }
+        }
+        
     }
     
-    private func handleTimeSyncReply(_ reply: [String: Any], mode: TimeSyncMode) {
+    
+    private func handleTimeSyncReply(_ reply: [String: Any]) {
         guard
             let syncIdNumber = reply["sync_id"] as? NSNumber,
             let phoneSendNumber = reply["phone_send_ns"] as? NSNumber,
@@ -248,160 +268,154 @@ class WatchSensorManager: ObservableObject {
             print("Invalid direct time sync: phoneReceiveNs < phoneSendNs")
             return
         }
-        
-        let rttNs = phoneReceiveNs - responsePhoneSendNs
-        
-        let maxRTT = watchToPhoneOffsetNs == nil ? initialMaxAcceptableRTTNs : normalMaxAcceptableRTTNs
-        
-        guard rttNs <= maxRTT else {
-            print("Ignoring direct time_sync with RTT \(rttNs) ns")
+                
+        guard watchSendNs >= watchReceiveNs else {
+            print("Invalid time sync: watchSendNs < watchReceiveNs")
             return
         }
+        
+        let phoneElapsedNs = phoneReceiveNs - responsePhoneSendNs
+        let watchProcessingNs = watchSendNs - watchReceiveNs
+        
+        
+        
+        guard phoneElapsedNs >= watchProcessingNs else {
+            print("Invalid time sync: processing time > phone elapsed time")
+            return
+        }
+    
+        let networkRTTNs = phoneElapsedNs - watchProcessingNs
         
         // calculate phone-watch offset, assuming roughly symmetrical trip
         let offset1 = Int64(responsePhoneSendNs) - Int64(watchReceiveNs)
         let offset2 = Int64(phoneReceiveNs) - Int64(watchSendNs)
         let estimatedOffset = (offset1 + offset2) / 2
         
-        switch mode {
-        case .initialBurst:
-            updateInitialSyncBestOffset(
-                estimatedOffset: estimatedOffset,
-                rttNs: rttNs,
-                syncId: responseSyncId
-            )
-        case .normal:
-            updateOffsetEstimate(
-                estimatedOffset: estimatedOffset,
-                rttNs: rttNs,
-                syncId: responseSyncId
-            )
-        }
-        
-        
-        updateOffsetEstimate(
-            estimatedOffset: estimatedOffset,
-            rttNs: rttNs,
-            syncId: responseSyncId
+        let sample = TimeSyncSample(
+            syncId: responseSyncId,
+            phoneSendNs: responsePhoneSendNs,
+            watchReceiveNs: watchReceiveNs,
+            watchSendNs: watchSendNs,
+            phoneReceiveNs: phoneReceiveNs,
+            rttNs: networkRTTNs,
+            estimatedOffsetNs: estimatedOffset
+            
         )
-    }
-    
-    private func resetTimeSyncState() {
-        pendingTimeSyncId = nil
-        pendingPhoneSendNs = nil
-
-        initialSyncCompletion = nil
-        initialSyncAttemptsRemaining = 0
-        initialSyncBestOffsetNs = nil
-        initialSyncBestRTTNs = nil
         
-        watchToPhoneOffsetNs = nil
-        lastSyncRTTNs = nil
+        syncBurstSamples.append(sample)
     }
     
-    private func runInitialTimeSyncBurst(completion: @escaping () -> Void) {
-        initialSyncCompletion = completion
-        initialSyncAttemptsRemaining = initialSyncAttemptCount
-        initialSyncBestOffsetNs = nil
-        initialSyncBestRTTNs = nil
-        
-        performInitialTimeSyncAttempt()
-    }
     
-    private func updateInitialSyncBestOffset(estimatedOffset: Int64, rttNs: UInt64, syncId: UInt64) {
-        if let bestRTT = initialSyncBestRTTNs, rttNs >= bestRTT {
-            print("Initial sync id= \(syncId) accepted but not better than best RTT")
+    
+    private func runTimeSyncBurst(phase: String, completion: @escaping (WatchTimeSyncResult?) -> Void) {
+        guard syncBurstCompletion == nil else {
+            print("Sync burst already active")
+            completion(nil)
             return
         }
         
-        initialSyncBestRTTNs = rttNs
-        initialSyncBestOffsetNs = estimatedOffset
-        
-        print("""
-            Initial sync condidate improved
-            syncId      = \(syncId)
-            offsetNs    = \(estimatedOffset)
-            rttNs       = \(rttNs)
-            rttMs       = \(Double(rttNs) / 1_000_000.0)
-            """)
+        currentSyncPhase = phase
+        syncBurstSamples.removeAll()
+        syncAttemptsRemaining = syncAttemptCount
+        syncBurstCompletion = completion
+        performNextTimeSyncAttempt()
     }
     
-    private func finishInitialTimeSyncBurst() {
-        print("finishInitialTimeSyncBurst called")
-        
-        if let bestOffset = initialSyncBestOffsetNs,
-           let bestRTT = initialSyncBestRTTNs {
-            watchToPhoneOffsetNs = bestOffset
-            lastSyncRTTNs = bestRTT
-            
-            print("""
-                Initial time sync complete:
-                selectedOffsetNs    = \(bestOffset)
-                selectedRTTNs       = \(bestRTT)
-                selectedRTTMs       = \(Double(bestRTT) / 1_000_000.0)
-                """)
-        } else {
-            print("initial time sync failed: no valid sync replies")
-        }
-        
-        let completion = initialSyncCompletion
-        initialSyncCompletion = nil
-        print("Valling initial sync completion:", completion != nil)
-        completion?()
-    }
-    
-    private func performInitialTimeSyncAttempt() {
-        guard initialSyncAttemptsRemaining > 0 else {
-            finishInitialTimeSyncBurst()
+    private func performNextTimeSyncAttempt() {
+        guard syncAttemptsRemaining > 0 else {
+            finishTimeSyncBurst()
             return
         }
         
-        initialSyncAttemptsRemaining -= 1
-        performTimeSync(mode: .initialBurst)
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + initialSyncSpacingSeconds) {[weak self] in
-            self?.performInitialTimeSyncAttempt()
+        syncAttemptsRemaining -= 1
+        performTimeSync {
+            [weak self] in guard let self else { return }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + self.syncSpacingSeconds) { self.performNextTimeSyncAttempt()}
         }
     }
     
-    private func updateOffsetEstimate(estimatedOffset: Int64, rttNs: UInt64, syncId: UInt64) {
-        if watchToPhoneOffsetNs == nil {
-            watchToPhoneOffsetNs = estimatedOffset
-            lastSyncRTTNs = rttNs
-            
-            print("""
-                Initial time_sync accepted:
-                syncId:     =\(syncId)
-                offsetNs    =\(estimatedOffset)
-                rttNs:      =\(rttNs)
-                rttMs:      =\(Double(rttNs) / 1_000_000.0)
-                """)
-            
+    private func finishTimeSyncBurst() {
+        
+        let completion = syncBurstCompletion
+        syncBurstCompletion = nil
+        
+        guard syncBurstSamples.count >= selectedSyncSampleCount else {
+            print ("Sync Failed: only \(syncBurstSamples.count) valid samples")
+            completion?(nil)
             return
         }
         
-        let currentOffset = watchToPhoneOffsetNs!
+        let selectedSamples = Array(
+            syncBurstSamples
+                .sorted { $0.rttNs < $1.rttNs }
+                .prefix(selectedSyncSampleCount)
+        )
         
-        // smoothe offset with incoming, non stale time_syncs
-        let smoothed = Double(currentOffset) * (1.0 - offsetSmoothingFactor) + Double(estimatedOffset) * offsetSmoothingFactor
+        guard let offset = medianOffset(from: selectedSamples),
+              let medianRTT = medianRTT(from: selectedSamples),
+              let spread = offsetSpread(from: selectedSamples),
+              let medianSample = selectedSamples.first(
+                where: {$0.estimatedOffsetNs == offset}
+              )
+        else {
+            print("Sync failed while calculating the result")
+            completion?(nil)
+            return
+        }
         
-        watchToPhoneOffsetNs = Int64(smoothed)
-        lastSyncRTTNs = rttNs
+        watchToPhoneOffsetNs = offset
+        lastSyncRTTNs = selectedSamples[0].rttNs
         
-        print("""
-            Time_sync update accepted:
-            syncId:             =\(syncId)
-            estimatedOffset:    =\(estimatedOffset)
-            smoothedOffset:     =\(smoothed)
-            rttNs:              =\(rttNs)
-            rttMs:              =\(Double(rttNs) / 1_000_000.0)
-            """)
+        let result = WatchTimeSyncResult(
+            phase: currentSyncPhase,
+            offsetNs: offset,
+            phoneAnchorNs: medianSample.phoneAnchorNs,
+            watchAnchorNs: medianSample.watchAnchorNs,
+            minRTTNs: selectedSamples[0].rttNs,
+            medianSelectedRTTNs: medianRTT,
+            offsetSpreadNs: spread,
+            validSampleCount: syncBurstSamples.count,
+            selectedSampleCount: selectedSamples.count
+            )
+        completion?(result)
     }
+    
+    private func medianOffset(from samples: [TimeSyncSample]) -> Int64? {
+        guard !samples.isEmpty else { return nil }
+        
+        let offsets = samples
+            .map { $0.estimatedOffsetNs }
+            .sorted()
+        
+        return offsets[offsets.count/2]
+    }
+    
+    private func medianRTT (from samples: [TimeSyncSample]) -> UInt64? {
+        guard !samples.isEmpty else { return nil }
+        
+        let values =
+            samples
+                .map { $0.rttNs }
+                .sorted()
+        
+        return values[values.count/2]
+    }
+    
+    private func offsetSpread(from samples: [TimeSyncSample]) -> UInt64? {
+        
+        let offsets = samples.map { $0.estimatedOffsetNs }
+        
+        guard let min = offsets.min(),
+              let max = offsets.max()
+        else {
+            return nil
+        }
+        return UInt64(max - min)
+    }
+   
     
     private func adjustTimestamp(_ watchTimestampNs: UInt64) -> UInt64? {
-        
-//        print("adjustedTimestamp called | raw=\(watchTimestampNs), offset=\(watchToPhoneOffsetNs.map(String.init) ?? "nil")")
-        
         guard let offset = watchToPhoneOffsetNs else {
             return nil
         }
@@ -422,13 +436,59 @@ class WatchSensorManager: ObservableObject {
         return UInt64(result.partialValue)
     }
     
-    private func stopTimeSyncTimer() {
-        timeSyncTimer?.invalidate()
-        timeSyncTimer = nil
+    func synchronizeForTrial(phase: String, completion: @escaping (WatchTimeSyncResult?) -> Void) {
+        guard isWatchConnected else {
+            print("watch not connected")
+            completion(nil)
+            return
+        }
         
-        pendingTimeSyncId = nil
-        pendingPhoneSendNs = nil
+        guard !isTrialSyncinProgress else {
+            print("Trial sync already in progress")
+            completion(nil)
+            return
+        }
+        
+        isTrialSyncinProgress = true
+        pendingStopAfterTrialSync = false
+        
+        var didFinish = false
+        
+        let finishSync: (WatchTimeSyncResult?) -> Void = { [weak self] result in
+            guard let self, !didFinish else { return }
+            
+            didFinish = true
+            
+            self.isTrialSyncinProgress = false
+            
+            if self.pendingStopAfterTrialSync {
+                self.connectivityService.sendCommand("stop_streaming")
+                self.isWatchStreaming = false
+                self.watchHz = 0
+            } else {
+                self.connectivityService.sendCommand("resume_sensor_transmission")
+            }
+        
+            self.pendingStopAfterTrialSync = false
+            completion(result)
+        }
+        
+        connectivityService.sendCommand("pause_sensor_transmission")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else {
+                completion(nil)
+                return
+            }
+            
+            self.runTimeSyncBurst(phase: phase) { result in
+                finishSync(result)
+            }
+            
+        }
+      
     }
+   
     
     // MARK: - Statistics
     
@@ -477,8 +537,10 @@ extension WatchSensorManager: WatchConnectivityDelegate {
         switch packet.sensorType {
                        
         case "watch_imu":
-            guard let adjustedTimestamp = adjustTimestamp(packet.timestampNs) else {
-                print("Dropping Watch IMU before time sync")
+            let rawWatchTimestampNs = packet.timestampNs
+            let phoneReceiveTimestampNs = phoneNowNs()
+            
+            guard let adjustedTimestamp = adjustTimestamp(rawWatchTimestampNs) else {
                 return
             }
             guard let watchIMU = packet.decodeIMU() else {
@@ -509,7 +571,6 @@ extension WatchSensorManager: WatchConnectivityDelegate {
             
         case "watch_attitude":
             guard let adjustedTimestamp = adjustTimestamp(packet.timestampNs) else {
-                print("Dropping watch attitude before time sync")
                 return
             }
             guard let attitude = packet.decodeAttitude() else { return }

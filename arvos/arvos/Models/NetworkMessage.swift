@@ -74,6 +74,48 @@ struct BinaryMessage {
     }
 }
 
+struct WatchSyncResultMessage: Codable {
+    let type: String
+    let timestampNs: UInt64
+    
+    let phase: String
+    
+    let offsetNs: Int64
+    
+    let phoneAnchorNs: UInt64
+    let watchAnchorNs: UInt64
+    
+    let minRTTNs: UInt64
+    let medianSelectedRTTNs: UInt64
+    let offsetSpreadNs: UInt64
+    
+    let validSampleCount: Int
+    let selectedSampleCount: Int
+    
+    let boundaryPhoneNs: UInt64
+    
+    init(result: WatchTimeSyncResult, boundaryPhoneNs: UInt64) {
+        type = "watch_sync_result"
+        
+        timestampNs = Constants.Time.now()
+        
+        phase = result.phase
+        
+        offsetNs = result.offsetNs
+        phoneAnchorNs = result.phoneAnchorNs
+        watchAnchorNs = result.watchAnchorNs
+        
+        minRTTNs = result.minRTTNs
+        medianSelectedRTTNs = result.medianSelectedRTTNs
+        offsetSpreadNs = result.offsetSpreadNs
+        
+        validSampleCount = result.validSampleCount
+        selectedSampleCount = result.selectedSampleCount
+        
+        self.boundaryPhoneNs = boundaryPhoneNs        
+    }
+}
+
 // MARK: - Control Messages
 
 /// Connection handshake message

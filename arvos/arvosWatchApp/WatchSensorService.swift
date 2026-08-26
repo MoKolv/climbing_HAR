@@ -23,6 +23,24 @@ class WatchSensorService: ObservableObject {
     private var updateTimer: Timer?
     private var sampleTimestamps: [TimeInterval] = []
     private let fpsWindow: TimeInterval = 1.0
+    
+    private let motionQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
+    
+    private let activityQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        queue.qualityOfService = .utility
+        return queue
+    }()
+    
+    private var isMotionCaptureRunninging = false
+    private var resumeCaptureAfterSyncPause = false
+    private var sensorTransmissionPaused = false
 
     
     
@@ -45,7 +63,7 @@ class WatchSensorService: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .watchCommandReceived,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
             guard let self = self,
                   let command = notification.userInfo?["command"] as? String,
@@ -97,6 +115,28 @@ class WatchSensorService: ObservableObject {
         case "update_frequency":
             let hz = parseHz(from: parameters, defaultHz: 50)
             updateFrequency(hz)
+            
+        case "pause_sensor_transmission":
+            sensorTransmissionPaused = true
+            resumeCaptureAfterSyncPause = isStreaming && isMotionCaptureRunninging
+            
+            stopMotionCapture()
+            connectivityService.discardBufferedSensorPackers()
+            connectivityService.cancelOutstandingSensorTransfers()
+            
+            print("Watch sensor transmission paused, backlog cleared")
+            
+        case "resume_sensor_transmission":
+            let shouldResumeCapture = resumeCaptureAfterSyncPause && isStreaming
+            
+            sensorTransmissionPaused = false
+            resumeCaptureAfterSyncPause = false
+            
+            if shouldResumeCapture {
+                motionManager.deviceMotionUpdateInterval = updateInterval
+                startMotionCapture()
+            }
+            print("Watch sensor transmission resumed")
                         
         default:
             print("⚠️ Unknown command: \(command)")
@@ -112,10 +152,61 @@ class WatchSensorService: ObservableObject {
         motionManager.deviceMotionUpdateInterval = updateInterval
     }
     
+    private func startMotionCapture() {
+        guard !isMotionCaptureRunninging else { return }
+        
+        motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, error in
+            guard let self, let motion else {
+                if let error {
+                    print("Motion update error: \(error)")
+                }
+                return
+            }
+            self.handleMotionUpdate(motion)
+        }
+        
+        if CMMotionActivityManager.isActivityAvailable() {
+            activityManager.startActivityUpdates(to: activityQueue) { [weak self] activity in
+                guard let self, let activity else {return}
+                self.handleActivityUpdate(activity)
+            }
+        } else {
+            print("Motion activity classification not available on this watch")
+        }
+        
+        isMotionCaptureRunninging = true
+            
+    }
+
+    private func stopMotionCapture(resetDisplayedHz: Bool = true) {
+        guard isMotionCaptureRunninging else {return}
+        
+        motionManager.stopDeviceMotionUpdates()
+        
+        if CMMotionActivityManager.isActivityAvailable() {
+            activityManager.stopActivityUpdates()
+        }
+        
+        updateTimer?.invalidate()
+        updateTimer = nil
+        isMotionCaptureRunninging = false
+        
+        if resetDisplayedHz {
+            DispatchQueue.main.async {
+                self.currentHz = 0
+            }
+        }
+    }
     // MARK: - Streaming Control
     
     func startStreaming(hz: Int = 50) {
-        guard !isStreaming else { return }
+        sensorTransmissionPaused = false
+        resumeCaptureAfterSyncPause = false
+        
+        guard !isStreaming else {
+            print("start_streaming on watch called while already streaming, ignored")
+            return
+        }
         guard motionManager.isDeviceMotionAvailable else {
             print("❌ Cannot start streaming: device motion not available")
             return
@@ -124,50 +215,34 @@ class WatchSensorService: ObservableObject {
         targetHz = min(hz, 100) // Cap at 100Hz for watch
         motionManager.deviceMotionUpdateInterval = updateInterval
         
-        // Start motion updates
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        queue.qualityOfService = .userInitiated
+        startMotionCapture()
         
-        motionManager.startDeviceMotionUpdates(to: queue) { [weak self] (motion, error) in
-            guard let self = self, let motion = motion else {
-                if let error = error {
-                    print("❌ Motion update error: \(error)")
-                }
-                return
-            }
-            
-            self.handleMotionUpdate(motion)
-        }
-
-        if CMMotionActivityManager.isActivityAvailable() {
-            activityManager.startActivityUpdates(to: OperationQueue()) { [weak self] activity in
-                guard let self, let activity else { return }
-                self.handleActivityUpdate(activity)
-            }
-        } else {
-            print("ℹ️ Motion activity classification not available on this watch")
+        DispatchQueue.main.async {
+            self.isStreaming = true
+            self.sampleCount = 0
+            self.sampleTimestamps.removeAll()
         }
         
-        isStreaming = true
-        sampleCount = 0
-        sampleTimestamps.removeAll()
-        
-        print("✅ Watch sensor streaming started at \(targetHz) Hz")
+        print(" Watch sensor streaming started at \(targetHz) Hz")
     }
     
     func stopStreaming() {
-        guard isStreaming else { return }
-        
-        motionManager.stopDeviceMotionUpdates()
-        if CMMotionActivityManager.isActivityAvailable() {
-            activityManager.stopActivityUpdates()
+        guard isStreaming else {
+            print("stop_streaming on watch called while not streaming, ignored")
+            return
         }
-        updateTimer?.invalidate()
-        updateTimer = nil
         
-        isStreaming = false
-        currentHz = 0
+        resumeCaptureAfterSyncPause = false
+        stopMotionCapture(resetDisplayedHz: false)
+        
+        DispatchQueue.main.async {
+            self.isStreaming = false
+            self.currentHz = 0
+        }
+        
+        sensorTransmissionPaused = false
+        connectivityService.discardBufferedSensorPackers()
+        connectivityService.cancelOutstandingSensorTransfers()
         
         print("⏹️ Watch sensor streaming stopped")
     }
@@ -187,6 +262,8 @@ class WatchSensorService: ObservableObject {
     // MARK: - Motion Handling
     
     private func handleMotionUpdate(_ motion: CMDeviceMotion) {
+        
+        guard !sensorTransmissionPaused else { return }
         // Create timestamp (nanoseconds since reference date)
         let timestamp = UInt64(motion.timestamp * 1_000_000_000)
         
@@ -220,7 +297,10 @@ class WatchSensorService: ObservableObject {
         }
 
         // Send to phone
-        connectivityService.send(packet: packet)
+        if !sensorTransmissionPaused {
+            connectivityService.send(packet: packet)
+        }
+        
         
         let attitude = motion.attitude
         let quaternion = SIMD4<Double>(
@@ -239,7 +319,11 @@ class WatchSensorService: ObservableObject {
         ) else {
             return
         }
-        connectivityService.send(packet: attitudePacket)
+        
+        if !sensorTransmissionPaused {
+            connectivityService.send(packet: attitudePacket)
+        }
+        
         
         // Update statistics
         DispatchQueue.main.async {
@@ -261,6 +345,7 @@ class WatchSensorService: ObservableObject {
     }
     
     private func handleActivityUpdate(_ activity: CMMotionActivity) {
+        guard !sensorTransmissionPaused else {return}
         let timestamp = UInt64(Date().timeIntervalSinceReferenceDate * 1_000_000_000)
         
         let activityData = WatchMotionActivityData(
@@ -276,7 +361,10 @@ class WatchSensorService: ObservableObject {
         guard let activityPacket = WatchSensorPacket.motionActivity(timestamp: timestamp, activity: activityData) else {
             return
         }
-        connectivityService.send(packet: activityPacket)
+        if !sensorTransmissionPaused {
+            connectivityService.send(packet: activityPacket)                
+        }
+        
         
         DispatchQueue.main.async {
             self.latestActivity = activityData

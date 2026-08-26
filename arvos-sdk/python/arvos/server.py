@@ -172,12 +172,20 @@ class ArvosServer:
 
                 if message_type == "watch_sync_result":
 
-                    if self.on_watch_sync_result:
-                        result = self.on_watch_sync_result(
-                            data
-                        )
+                    print("SERVER RECEIVED watch_sync_result", data)
+
+                    if self.on_watch_sync_result is None:
+                        print("ERROR: on_watch_sync_result not registered")
+                        return
+
+                    try:
+                        result = self.on_watch_sync_result(data)
                         if asyncio.iscoroutine(result):
                             await result
+                    except Exception as exc:
+                        print("watch_sync_result callback failed:", repr(exc))
+                    else:
+                        print("SERVER watch_sync_result callback completed")
 
                     return
 
@@ -206,11 +214,25 @@ class ArvosServer:
 
     async def broadcast(self, message: str):
         """Broadcast message to all connected clients"""
-        if self.clients:
-            await asyncio.gather(
-                *[client.send(message) for client in self.clients],
-                return_exceptions=True
-            )
+
+        if not self.clients:
+            print("broadcast: no connected clients")
+            return
+
+        clients = list(self.clients)
+
+        print(f"Broadcasting to {len(clients)} clients")
+
+        resuslts = await asyncio.gather(
+            *[client.send(message) for client in clients],
+            return_exceptions=True
+        )
+
+        for client, result in zip(clients, resuslts):
+            if isinstance(result, Exception):
+                print("Websocket send failed:", client.remote_address, repr(result))
+            else:
+                print("Websocket send succeeded:", client.remote_address)
 
     async def send_command(self, command: str, **parameters):
         """Send a command to connected Arvos clients"""
@@ -227,7 +249,11 @@ class ArvosServer:
                 "no Arvos client connected"
             )
 
+        print("SERVER SEND COMAND:", message)
+
         await self.broadcast(json.dumps(message))
+
+        print("SERVER COMMAND SENT:", message)
 
     async def send_to_client(self, websocket: websockets.WebSocketServerProtocol, message: str):
         """Send message to specific client"""

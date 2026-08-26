@@ -6,6 +6,7 @@ records IMU Data in a csv with timestamps; a video and a csv with metadata for t
 """
 import asyncio
 import csv
+from time import monotonic
 
 # input management
 from terminal_controls import PromptInput, listen_for_keys
@@ -22,8 +23,13 @@ import numpy as np
 
 async def main():
     # create output directory
-    output_dir = Path(f"../Data/arvos_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    output_dir.mkdir(exist_ok=True)
+
+    project_root = Path(__file__).resolve().parents[2]
+    data_root = project_root / "Data"
+    data_root.mkdir(exist_ok=True, parents=True)
+
+    output_dir = data_root / f"arvos_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    output_dir.mkdir(exist_ok=True, parents=True)
 
     print (f"saving data to: {output_dir}")
 
@@ -35,6 +41,20 @@ async def main():
     sync_file = open(output_dir / "watch_sync.csv", "w", newline ="")
 
     # video writer
+
+    FLUSH_EVERY_ROWS = 100
+    FLUSH_EVERY_SECONDS = 0.5
+
+    batched_files = {
+        "imu": imu_file,
+        "watch_imu": watch_imu_file,
+        "watch_attitude": watch_attitude_file,
+        "video_metadata": video_metadata_file,
+    }
+
+    pending_flush_rows = {name: 0 for name in batched_files}
+    last_flush_time = {name: monotonic() for name in batched_files}
+
     video_writer = None
     frame_count = 0
 
@@ -127,47 +147,58 @@ async def main():
             pre_sync_event.clear()
             post_sync_event.clear()
 
-            print(
-                f"\n Preparing trial"
-                f"{trial_id}"
-            )
+            print(f"\n Preparing trial {trial_id}")
 
             await server.send_command("prepare_trial_sync")
 
             try:
                 await asyncio.wait_for(
                     pre_sync_event.wait(),
-                    timeout=15.0
+                    timeout=30.0
                 )
+
             except asyncio.TimeoutError:
                 print("Pre-sync timed out")
                 return
 
+            if pre_sync_result is None:
+                print("Pre-sync failed")
+                return
+
+            await server.send_command("start_streaming")
             state.recording = True
 
             print("\n🔴 Started recording")
+            return
 
-            #STOP
+        #STOP
 
-            print("\n⬜ Stopping recording" )
+        print("\n⬜ Stopping recording" )
 
-            post_sync_event.clear()
+        state.recording = False
 
-            await server.send_command("post_trial_sync")
+        post_sync_result = None
+        post_sync_event.clear()
 
-            try:
-                await asyncio.wait_for(
-                    post_sync_event.wait(),
-                    timeout=15.0
-                )
+        await server.send_command("post_trial_sync")
+        await server.send_command("stop_streaming")
 
-            except asyncio.TimeoutError:
-                print("Post-sync timed out")
-                return
+        try:
+            await asyncio.wait_for(
+                post_sync_event.wait(),
+                timeout=30.0
+            )
 
-            state.recording = False
+        except asyncio.TimeoutError:
+            print("Post-sync timed out")
+            return
 
-            print("\n✅ Trial complete")
+        if post_sync_result is None:
+            print("Post-sync failed")
+            return
+
+
+        print("\n✅ Trial complete")
 
 
 
@@ -206,6 +237,26 @@ async def main():
         state.boulder_id = boulder_id.strip()
         print(f"✅ Boulder ID set to: {state.boulder_id}")
 
+    def flush_helper(name:str, force: bool =False) -> None:
+        now = monotonic()
+
+        if force:
+            batched_files[name].flush()
+            pending_flush_rows[name] = 0
+            last_flush_time[name] = now
+            return
+
+        pending_flush_rows[name] += 1
+
+        if(
+            pending_flush_rows[name] >= FLUSH_EVERY_ROWS
+            or now - last_flush_time[name] >= FLUSH_EVERY_SECONDS
+        ):
+            batched_files[name].flush()
+            pending_flush_rows[name] = 0
+            last_flush_time[name] = now
+
+
 
     # print status to terminal
     async def status(_: PromptInput):
@@ -234,7 +285,7 @@ async def main():
 
         print("\n📊 Status")
         print(f"    {connection_message(state.imu_phone_connected)}")
-        print(f"    {connection_message(state.video_phone_connected)}")
+        print(f"    {connection_message(state.watch_connected)}")
         print(f"    {recording_message(state.recording)}")
 
         print("\n Streams")
@@ -269,7 +320,7 @@ async def main():
             *data.linear_acceleration,
             *(data.gravity if data.gravity else (0, 0, 0)),
         ])
-        imu_file.flush()
+        flush_helper("imu")
 
     async def on_watch_imu(data: WatchIMUData):
         state.mark_received("watch_imu")
@@ -282,7 +333,7 @@ async def main():
             *data.angular_velocity,
             *data.linear_acceleration,
         ])
-        watch_imu_file.flush()
+        flush_helper("watch_imu")
 
 
     async def on_watch_attitude(data: WatchAttitudeData):
@@ -300,7 +351,7 @@ async def main():
             data.reference_frame
             #*(data.attitude if data.attitude else (0, 0, 0)),
         ])
-        watch_attitude_file.flush()
+        flush_helper("watch_attitude")
 
     async def on_watch_activity(data: WatchMotionActivityData):
         print("received watch_activity")
@@ -320,7 +371,7 @@ async def main():
             frame.timestamp_s,
             frame_count
         ])
-        video_metadata_file.flush()
+        flush_helper("video_metadata")
 
         # Decode JPEG
         image = Image.open(io.BytesIO(frame.data))
@@ -362,61 +413,55 @@ async def main():
         state.imu_phone_connected = False
         state.video_phone_connected = False
 
+    async def on_error(error:str, details:str | None):
+        print(f"\nPHONE ERROR: {error}")
+        if details:
+            print(details)
+
+        if error == "pre_sync_failed":
+            pre_sync_event.set()
+        elif error == "post_sync_failed":
+            post_sync_event.set()
+
     async def on_watch_sync_result(data:dict):
 
-        nonlocal \
-            pre_sync_result, \
-            post_sync_result
+        nonlocal pre_sync_result, post_sync_result
 
         phase = data["phase"]
-
-        print(
-            f"\n Watch {phase.upper()}"
-            f"sync complete"
-        )
-
-        print(
-            f"offset: "
-            f"{data['offset_ns']}"
-        )
-
-        print(
-            f"minimum RTT: "
-            f"{data['min_rtt_ns'] / 1e6:.2f} ms"
-        )
-
-        print(
-            f"offset spread: "
-            f"{data['offset_spread_ns'] / 1e6:.2f} ms"
-        )
-
-        sync_writer.writerow([
-            trial_id,
-
-            phase,
-            data["offset_ns"],
-            data["phone_anchor_ns"],
-            data["watch_anchor_ns"],
-
-            data["min_rtt_ns"],
-            data["median_selected_rtt_ns"],
-            data["offset_spread_ns"],
-
-            data["valid_sample_count"],
-            data["selected_sample_count"],
-
-            data["boundary_phone_ns"],
-        ])
-
-        sync_file.flush()
 
         if phase == "pre":
             pre_sync_result = data
             pre_sync_event.set()
-
         elif phase == "post":
             post_sync_result = data
             post_sync_event.set()
+        else:
+            print(f"Unknown watch sync phase: {phase!r}")
+            return
+
+        try:
+            print(f"\nWatch {phase.upper()} sync complete")
+            print(f"offset: {data['offsetNs']}")
+            print(f"minimum RTT: {data['minRTTNs'] / 1e6:.2f} ms")
+            print(f"offset spread: {data['offsetSpreadNs'] / 1e6:.2f} ms")
+
+            sync_writer.writerow([
+                trial_id,
+                phase,
+                data["offsetNs"],
+                data["phoneAnchorNs"],
+                data["watchAnchorNs"],
+                data["minRTTNs"],
+                data["medianSelectedRTTNs"],
+                data["offsetSpreadNs"],
+                data["validSampleCount"],
+                data["selectedSampleCount"],
+                data["boundaryPhoneNs"],
+            ])
+            sync_file.flush()
+        except Exception as exc:
+            print("Failed to record watch_sync_result:", repr(exc))
+
 
 
     # setup handlers
@@ -428,6 +473,9 @@ async def main():
     server.on_connect = on_connect
     server.on_disconnect = on_disconnect
     server.on_watch_sync_result = on_watch_sync_result
+    server.on_error = on_error
+
+    print("Registered watch sync callback:", server.on_watch_sync_result)
 
     print("🚀 Starting server...")
 
@@ -448,8 +496,15 @@ async def main():
 
         await asyncio.gather(server_task, keyboard_task, return_exceptions=True)
 
+        for name in batched_files:
+            flush_helper(name, force=True)
+
+        sync_file.flush()
+
         imu_file.close()
+        watch_attitude_file.close()
         video_metadata_file.close()
+        sync_file.close()
         sync_file.close()
 
         if video_writer is not None:

@@ -522,6 +522,76 @@ class NetworkManager: ObservableObject {
         } catch {
         }
     }
+    
+    private func sendWatchSyncResult(_ result: WatchTimeSyncResult, boundaryPhoneNs: UInt64) {
+        
+        print("""
+            Sending watch_sync_result
+            phase: \(result.phase)
+            offset: \(result.offsetNs)
+            boundary: \(boundaryPhoneNs)
+            """)
+        
+        let message =
+            WatchSyncResultMessage(
+                result: result,
+                boundaryPhoneNs: boundaryPhoneNs
+            )
+        
+        do {
+            if isServerMode {
+                print("watch_sync_result via iPhone server")
+                try webSocketServer.broadcast(json: message)
+            } else if let adapter {
+                print("watch_sync_result via adapter")
+                try adapter.send(json: message)
+            } else {
+                print("watch_sync_result via legacy WebSocket")
+                try webSocketService.send(json: message)
+            }
+            
+            print("watch_sync_result sent and returned")
+        } catch {
+            print("Failed to send Watch sync result:", error)
+        }
+            
+            
+    }
+    
+    private func handleIncomingServerMessage(_ message: String) {
+        print ("RAW SERVER MESSAGE:", message)
+        
+        guard let data = message.data(using: .utf8) else {
+            print("Could not convert server message to Data")
+            return
+        }
+        
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("Could not decode server message as JSON")
+            return
+        }
+        
+        print("SERVER JSON:", json)
+        
+        let messageType = (json["type"] as? String)
+        
+        guard let messageType else {
+            print("Server message has no type")
+            return
+        }
+        
+        switch messageType {
+        
+        case "command":
+            handleCommand(json)
+            
+        case "ack": break
+            
+        default:
+            print("Unhandled server message type:", messageType)
+        }
+        
+    }
 
     // MARK: - Statistics
 
@@ -557,26 +627,10 @@ extension NetworkManager: WebSocketServiceDelegate {
             self.connectionState = state
         }
     }
-
-    func webSocketService(_ service: WebSocketService, didReceiveMessage message: String) {
-        // Handle incoming messages from server (commands, acknowledgments, etc.)
-
-        // Parse and handle server commands
-        if let data = message.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-
-            if let type = json["type"] as? String {
-                switch type {
-                case "command":
-                    handleCommand(json)
-                case "ack":
-                    // Message acknowledged
-                    break
-                default:
-                    break
-                }
-            }
-        }
+    
+    func webSocketService( _ service: WebSocketService, didReceiveMessage message: String) {
+        print("Message received through WebSocketService")
+        handleIncomingServerMessage(message)
     }
 
     func webSocketService(_ service: WebSocketService, didEncounterError error: Error) {
@@ -585,7 +639,12 @@ extension NetworkManager: WebSocketServiceDelegate {
 
     private func handleCommand(_ json: [String: Any]) {
         // Handle server commands (e.g., change mode, start/stop recording)
-        guard let command = json["command"] as? String else { return }
+        guard let command = json["command"] as? String else {
+            print("Command JSON contains no command:", json)
+            return
+        }
+        
+        print("NetworkManager received command:", command)
 
         switch command {
         case "start_recording":
@@ -594,6 +653,49 @@ extension NetworkManager: WebSocketServiceDelegate {
         case "stop_recording":
             // Notify app to stop recording
             NotificationCenter.default.post(name: .stopRecording, object: nil)
+            
+        case "prepare_trial_sync":
+            print("Pre trial sync request")
+            
+            WatchSensorManager.shared.synchronizeForTrial(phase: "pre") {
+                [weak self] result in guard let self, let result
+                else {
+                    self?.sendError("pre_sync_failed", details: "Watch time sync burst returned nil")
+                    return
+                }
+                
+                let boundary = Constants.Time.now()
+                self.sendWatchSyncResult(result, boundaryPhoneNs: boundary)
+        
+            }
+        
+        case "post_trial_sync":
+            print("Post trial sync request")
+            
+            let boundary = Constants.Time.now()
+            
+            WatchSensorManager.shared.synchronizeForTrial(phase: "post") { [weak self] result in
+                
+                guard let self,
+                      let result
+                else {
+                    self?.sendError("post_sync_failed", details: "Watch time sync burst returned nil")
+                    return
+                }
+                
+                self.sendWatchSyncResult(result, boundaryPhoneNs: boundary)
+            }
+            
+        case "start_streaming":
+            print("Remote start streaming request")
+            DispatchQueue.main.async {
+                SensorManager.shared.startStreaming()
+            }
+        case "stop_streaming":
+            print("Remote stop streaming request")
+            DispatchQueue.main.async {
+                SensorManager.shared.stopStreaming()
+            }
         case "change_mode":
             if let modeString = json["mode"] as? String,
                let mode = StreamMode.allCases.first(where: { $0.rawValue == modeString }) {
@@ -623,6 +725,9 @@ extension NetworkManager: StreamingProtocolDelegate {
     }
 
     func streamingProtocol(_ adapter: StreamingProtocol, didReceiveMessage message: String) {
+        print("Message received through adapter:", adapter.protocolName)
+        
+        handleIncomingServerMessage(message)
     }
 
     func streamingProtocol(_ adapter: StreamingProtocol, didEncounterError error: Error) {
