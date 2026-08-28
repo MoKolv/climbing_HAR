@@ -118,16 +118,27 @@ class WatchSensorService: ObservableObject {
             updateFrequency(hz)
             
         case "pause_sensor_transmission":
+            let preserveBuffer =
+            (parameters["preserve_buffer"] as? Bool)
+            ?? (parameters["preserveBuffer"] as? NSNumber)?.boolValue
+            ?? false
+            
             sensorTransmissionPaused = true
             resumeCaptureAfterSyncPause = isStreaming && isMotionCaptureRunninging
             
             stopMotionCapture()
-            connectivityService.discardBufferedSensorPackers()
-            connectivityService.cancelOutstandingSensorTransfers()
+            connectivityService.pauseSensorDelivery()
             
-            print("Watch sensor transmission paused, backlog cleared")
-            
+            if preserveBuffer {
+                print("Watch transmission paused: preserving queued packets for post-trial drain")
+            } else {
+                connectivityService.discardBufferedSensorPackers()
+                connectivityService.cancelOutstandingSensorTransfers()
+                print("Watch transmission paused; backlog cleared")
+            }
+          
         case "resume_sensor_transmission":
+            connectivityService.resumeSensorDelivery()
             let shouldResumeCapture = resumeCaptureAfterSyncPause && isStreaming
             
             sensorTransmissionPaused = false
@@ -234,20 +245,29 @@ class WatchSensorService: ObservableObject {
             return
         }
         
+        sensorTransmissionPaused = true
         resumeCaptureAfterSyncPause = false
         stopMotionCapture(resetDisplayedHz: false)
+        
+        let capturedSampleCount = nextMotionSequenceId
         
         DispatchQueue.main.async {
             self.isStreaming = false
             self.currentHz = 0
         }
         
-        sensorTransmissionPaused = false
-        connectivityService.discardBufferedSensorPackers()
-        connectivityService.cancelOutstandingSensorTransfers()
-        
-        print("⏹️ Watch sensor streaming stopped")
-    }
+        connectivityService.drainSensorPackers {[weak self] in
+            guard let self else { return }
+            
+            self.connectivityService.sendCommand(
+                "watch_stream_drained",
+                parameters: ["captured_sample_count": NSNumber(value: capturedSampleCount),]
+                )
+            
+            print("Watch sensor queue drainer: \(capturedSampleCount) motion samples")
+        }
+        print("Watch capture stopped; draining queued packets")
+     }
     
     func updateFrequency(_ hz: Int) {
         let newHz = min(hz, 100)

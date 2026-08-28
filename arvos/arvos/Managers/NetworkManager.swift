@@ -554,9 +554,24 @@ class NetworkManager: ObservableObject {
         } catch {
             print("Failed to send Watch sync result:", error)
         }
-            
-            
     }
+    
+    func sendWatchStreamDrained(capturedSampleCount: UInt64) {
+        let message = WatchStreamDrainMessage(capturedSampleCount: capturedSampleCount)
+        
+        do {
+            if isServerMode{
+                try webSocketServer.broadcast(json: message)
+            } else if let adapter {
+                try adapter.send(json: message)
+            } else {
+                try webSocketServer.broadcast(json: message)
+            }
+        } catch {
+            print("Failed to send watch_stream_drained:", error)
+        }
+    }
+    
     
     private func handleIncomingServerMessage(_ message: String) {
         print ("RAW SERVER MESSAGE:", message)

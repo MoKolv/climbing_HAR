@@ -65,7 +65,8 @@ async def main():
     pass opealt_host= "192.168.178.2" when hosting over fritz box network
     otherwise omitt host/alt_host argument
     """
-    server = ArvosServer(alt_host= "192.168.178.2", port=9090)
+    server = ArvosServer(port=9090)
+    #server = ArvosServer(alt_host= "192.168.178.2", port=9090)
     
     # create csv writers
     imu_writer = csv.writer(imu_file, delimiter=";")
@@ -147,9 +148,11 @@ async def main():
 
     pre_sync_event = asyncio.Event()
     post_sync_event = asyncio.Event()
+    watch_drain_event = asyncio.Event()
 
     pre_sync_result = None
     post_sync_result = None
+    watch_drain_result = None
 
     trial_spools = {}
     active_pre_boundary_ns = None
@@ -297,6 +300,7 @@ async def main():
             trial_id, \
             pre_sync_result, \
             post_sync_result, \
+            watch_drain_result, \
             active_trial_id, \
             active_pre_boundary_ns
 
@@ -348,6 +352,9 @@ async def main():
         post_sync_result = None
         post_sync_event.clear()
 
+        watch_drain_result = None
+        watch_drain_event.clear()
+
         await server.send_command("post_trial_sync")
         await server.send_command("stop_streaming")
 
@@ -365,7 +372,23 @@ async def main():
             print("Post-sync failed")
             return
 
-        await wait_for_sensor_drain()
+        try:
+            await asyncio.wait_for(
+                watch_drain_event.wait(),
+                timeout=60.0,
+            )
+        except asyncio.TimeoutError:
+            print("Watch drain timed out; trial files were not finalised")
+            return
+
+        if watch_drain_result is None:
+            print("Watch drain failed; trial files were not finalised")
+            return
+
+        await wait_for_sensor_drain(
+            quiet_seconds= 0.5,
+            maximum_wait_seconds= 5.0
+        )
 
         post_boundary_ns = int(post_sync_result["boundaryPhoneNs"])
         finalize_trial(post_boundary_ns)
@@ -641,6 +664,13 @@ async def main():
             print("Failed to record watch_sync_result:", repr(exc))
 
 
+    async def on_watch_stream_drained(data:dict):
+        nonlocal watch_drain_result
+
+        watch_drain_result = data
+        print("Watch drain complete:", f"{data['capturedSampleCount']} motion samples captured")
+
+        watch_drain_event.set()
 
     # setup handlers
     server.on_imu = on_imu
@@ -651,6 +681,7 @@ async def main():
     server.on_connect = on_connect
     server.on_disconnect = on_disconnect
     server.on_watch_sync_result = on_watch_sync_result
+    server.on_watch_stream_drained = on_watch_stream_drained
     server.on_error = on_error
 
     print("Registered watch sync callback:", server.on_watch_sync_result)

@@ -54,6 +54,7 @@ class ArvosServer:
         self.on_watch_attitude = None
         self.on_watch_activity = None
         self.on_watch_sync_result = None
+        self.on_watch_stream_drained = None
 
     def get_local_ip(self) -> str:
         """
@@ -165,29 +166,44 @@ class ArvosServer:
                 data = None
 
             if isinstance(data, dict):
-                message_type = (
-                    data.get("type")
-                    or data.get("sensorType")
-                )
+                message_type = data.get("type") or data.get("sensorType")
 
-                if message_type == "watch_sync_result":
+                match message_type:
+                    case "watch_sync_result":
+                        print("SERVER RECEIVED watch_sync_result", data)
 
-                    print("SERVER RECEIVED watch_sync_result", data)
+                        if self.on_watch_sync_result is None:
+                            print("ERROR: on_watch_sync_result not registered")
+                            return
 
-                    if self.on_watch_sync_result is None:
-                        print("ERROR: on_watch_sync_result not registered")
+                        try:
+                            result = self.on_watch_sync_result(data)
+                            if asyncio.iscoroutine(result):
+                                await result
+                        except Exception as exc:
+                            print("watch_sync_result callback failed:", repr(exc))
+                        else:
+                            print("SERVER watch_sync_result callback completed")
+
                         return
 
-                    try:
-                        result = self.on_watch_sync_result(data)
-                        if asyncio.iscoroutine(result):
-                            await result
-                    except Exception as exc:
-                        print("watch_sync_result callback failed:", repr(exc))
-                    else:
-                        print("SERVER watch_sync_result callback completed")
+                    case "watch_stream_drained":
+                        print("SERVER RECEIVED watch_stream_drained", data)
 
-                    return
+                        if self.on_watch_stream_drained is None:
+                            print("ERROR: on_watch_stream_drained not registered")
+                            return
+
+                        try:
+                            result = self.on_watch_stream_drained(data)
+                            if asyncio.iscoroutine(result):
+                                await result
+                        except Exception as exc:
+                            print("watch_stream_drained callback failed:", repr(exc))
+                        else:
+                            print("SERVER watch_stream_drained callback completed")
+
+                        return
 
         """Delegate message to appropriate handler"""
         # Import client handlers to reuse parsing logic

@@ -115,6 +115,20 @@ class WatchSensorManager: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+        
+        NotificationCenter.default.addObserver(
+            forName: .watchCommandReceived,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard
+                let command = notification.userInfo?["command"] as? String,
+                command == "watch_stream_drained",
+                let parameters = notification.userInfo?["parameters"] as? [String: Any],
+                let count = parameters["captured_sample_count"] as? NSNumber
+            else { return }
+            NetworkManager.shared.sendWatchStreamDrained(capturedSampleCount: count.uint64Value)
+        }
     }
     
     // MARK: - Control
@@ -465,6 +479,8 @@ class WatchSensorManager: ObservableObject {
                 self.connectivityService.sendCommand("stop_streaming")
                 self.isWatchStreaming = false
                 self.watchHz = 0
+            } else if phase == "post" {
+                print("Post-sync complete; waiting for stop_streaming to drain watch-packets")
             } else {
                 self.connectivityService.sendCommand("resume_sensor_transmission")
             }
@@ -473,7 +489,7 @@ class WatchSensorManager: ObservableObject {
             completion(result)
         }
         
-        connectivityService.sendCommand("pause_sensor_transmission")
+        connectivityService.sendCommand("pause_sensor_transmission", parameters: ["preserve_buffer": phase == "post"])
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self else {

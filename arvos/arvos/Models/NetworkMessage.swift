@@ -116,6 +116,12 @@ struct WatchSyncResultMessage: Codable {
     }
 }
 
+struct WatchStreamDrainMessage: Codable {
+    let type = "watch_stream_drained"
+    let timestampNs = Constants.Time.now()
+    let capturedSampleCount: UInt64
+}
+
 // MARK: - Control Messages
 
 /// Connection handshake message

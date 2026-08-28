@@ -36,6 +36,9 @@ class WatchConnectivityService: NSObject, ObservableObject {
     private var liveBatchInFlight = false
     private var sensorGeneration: UInt64 = 0
     
+    private var sensorDeliveryPaused = false
+    private var pendingSensorDrainCompletions: [() -> Void] = []
+    
     // Statistics
     @Published private(set) var messagesSent: Int = 0
     @Published private(set) var messagesReceived: Int = 0
@@ -115,10 +118,50 @@ class WatchConnectivityService: NSObject, ObservableObject {
             messageQueue.removeFirst(500) // Drop oldest half
         }
         
+        let shouldScheduleFlush = !sensorDeliveryPaused && flushTimer == nil
         queueLock.unlock()
         
-        // Schedule flush if not already scheduled
-        if flushTimer == nil {
+        if shouldScheduleFlush {
+            scheduleFlush()
+        }
+    }
+    
+    func pauseSensorDelivery() {
+        queueLock.lock()
+        sensorDeliveryPaused = true
+        queueLock.unlock()
+        
+        flushTimer?.invalidate()
+        flushTimer = nil
+    }
+    
+    func resumeSensorDelivery() {
+        queueLock.lock()
+        sensorDeliveryPaused = false
+        let shouldScheduleFlush = !messageQueue.isEmpty && !liveBatchInFlight
+        queueLock.unlock()
+        
+        if shouldScheduleFlush {
+            scheduleFlush()
+        }
+    }
+    
+    func drainSensorPackers(completion: @escaping () -> Void) {
+        queueLock.lock()
+        
+        sensorDeliveryPaused = false
+        
+        if messageQueue.isEmpty && !liveBatchInFlight {
+            queueLock.unlock()
+            DispatchQueue.main.async(execute: completion)
+            return
+        }
+        
+        pendingSensorDrainCompletions.append(completion)
+        let shouldScheduleFlush = !liveBatchInFlight
+        queueLock.unlock()
+        
+        if shouldScheduleFlush {
             scheduleFlush()
         }
     }
@@ -178,6 +221,17 @@ class WatchConnectivityService: NSObject, ObservableObject {
         let useLiveMessage = session.isReachable
         
         queueLock.lock()
+        
+        if sensorDeliveryPaused {
+            queueLock.unlock()
+            return
+        }
+        
+        if !useLiveMessage && !pendingSensorDrainCompletions.isEmpty {
+            queueLock.unlock()
+            scheduleFlush()
+            return
+        }
         
         if useLiveMessage && liveBatchInFlight {
             queueLock.unlock()
@@ -270,11 +324,23 @@ class WatchConnectivityService: NSObject, ObservableObject {
             messageQueue.insert(contentsOf: failedPackets, at: 0)
         }
         
-        let shouldFlushAgain = !messageQueue.isEmpty
+        let shouldFlushAgain = !messageQueue.isEmpty && !sensorDeliveryPaused
+        let drainCompletions: [() -> Void]
+        if messageQueue.isEmpty && !liveBatchInFlight {
+            drainCompletions = pendingSensorDrainCompletions
+            pendingSensorDrainCompletions.removeAll()
+        } else {
+            drainCompletions = []
+        }
+        
         queueLock.unlock()
         
         if shouldFlushAgain {
             scheduleFlush()
+        }
+        
+        for completion in drainCompletions {
+            DispatchQueue.main.async(execute: completion)
         }
     }
     
