@@ -228,6 +228,7 @@ class WatchSensorService: ObservableObject {
         motionManager.deviceMotionUpdateInterval = updateInterval
         
         nextMotionSequenceId = 0
+        connectivityService.resetSensorTransportMetrics()
         startMotionCapture()
         
         DispatchQueue.main.async {
@@ -256,7 +257,7 @@ class WatchSensorService: ObservableObject {
             self.currentHz = 0
         }
         
-        connectivityService.drainSensorPackers {[weak self] in
+        connectivityService.drainSensorPackets {[weak self] in
             guard let self else { return }
             
             self.connectivityService.sendCommand(
