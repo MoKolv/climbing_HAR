@@ -402,10 +402,10 @@ async def main():
         print("marked")
 
     # connection messages
-    def connection_message(is_connected: bool) -> str:
+    def connection_message(device: str, is_connected: bool) -> str:
         if is_connected:
-            return "✅ Phone connected"
-        return "❌ Phone not connected"
+            return f"✅ {device} connected"
+        return f"❌ {device} not connected"
 
     def recording_message(is_recording: bool) -> str:
         if is_recording:
@@ -479,8 +479,9 @@ async def main():
 
 
         print("\n📊 Status")
-        print(f"    {connection_message(state.imu_phone_connected)}")
-        print(f"    {connection_message(state.watch_connected)}")
+        print(f"    {connection_message('IMU_Phone', state.imu_phone_connected)}")
+        print(f"    {connection_message('VIDEO_Phone', state.video_phone_connected)}")
+        print(f"    {connection_message('Watch', state.watch_connected)}")
         print(f"    {recording_message(state.recording)}")
 
         print("\n Streams")

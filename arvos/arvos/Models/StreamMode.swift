@@ -189,16 +189,16 @@ enum StreamMode: String, Codable, CaseIterable, Identifiable {
         case .custom:
             // Default configuration for custom mode - will be modified by user selection
             return ModeConfiguration(
-                cameraEnabled: false,
+                cameraEnabled: true,
                 cameraFPS: 30,
                 depthEnabled: false,
                 depthFPS: 10,
-                imuEnabled: true,
+                imuEnabled: false,
                 imuHz: 100,
                 poseEnabled: false,
                 poseHz: 60,
                 gpsEnabled: false,
-                watchEnabled: true,
+                watchEnabled: false,
                 watchHz: 100 ,
                 recordingEnabled: false,
                 autoDuration: nil
