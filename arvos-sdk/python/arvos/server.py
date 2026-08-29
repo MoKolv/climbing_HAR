@@ -6,7 +6,7 @@ import asyncio
 import websockets
 import json
 import qrcode
-from typing import Set, Optional, Callable
+from typing import Set, Optional, Callable, Awaitable
 from datetime import datetime
 import socket
 
@@ -35,8 +35,8 @@ class ArvosServer:
         self.handshake_sender: Optional[websockets.WebSocketServerProtocol] = None
 
         # Callbacks - users can assign these
-        self.on_connect: Optional[Callable[[str], None]] = None
-        self.on_disconnect: Optional[Callable[[str], None]] = None
+        self.on_connect: Optional[Callable[[str], Awaitable[None]]] = None
+        self.on_disconnect: Optional[Callable[[str], Awaitable[None]]] = None
         self.on_message: Optional[Callable[[str, any], None]] = None
 
         # Message handlers (same as ArvosClient)
