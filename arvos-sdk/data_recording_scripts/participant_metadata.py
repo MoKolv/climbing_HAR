@@ -98,7 +98,7 @@ class ParticipantMetadataStore:
         metadata["trials"].append(
             {
                 "trial_number": trial_number,
-                "directory": trial_directory,
+                "directory": trial_directory.name,
                 "started_at": started_at,
                 "boulder_id": boulder_id,
                 "status": "preparing"
@@ -117,15 +117,25 @@ class ParticipantMetadataStore:
 
     def mark_trial_complete(
             self,
-            reservations: TrialReservation,
-            reason: str,
+            reservation: TrialReservation,
+            summary: dict[str, Any],
     ) -> None:
-        metadata = self.load(reservations.participant_id)
-        trial = self._find_trial(metadata, reservations.trial_number)
+        metadata = self.load(reservation.participant_id)
+        trial = self._find_trial(metadata, reservation.trial_number)
+
+        trial.update(summary)
+        trial["status"] = "failed"
+        trial["finished_at"] = now_iso()
+
+        self._write(reservation.participant_id, metadata)
+
+    def mark_trial_failed(self, reservation: TrialReservation, reason: str) -> None:
+        metadata = self.load(reservation.participant_id)
+        trial = self._find_trial(metadata, reservation.trial_number)
 
         trial["status"] = "failed"
         trial["failure_reason"] = reason
-        tiral["finished_at"] = now_iso()
+        trial["finished_at"] = now_iso()
 
         self._write(reservation.participant_id, metadata)
 
