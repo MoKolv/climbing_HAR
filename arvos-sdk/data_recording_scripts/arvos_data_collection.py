@@ -34,8 +34,12 @@ async def main() -> None:
     pass  alt_host= "192.168.178.2" when hosting over fritz box network
     otherwise omit host/alt_host argument
     """
-    #server = ArvosServer(port=9090)
-    server = ArvosServer(alt_host= "192.168.178.2", port=9090)
+    server = ArvosServer(port=9090)
+    #server = ArvosServer(alt_host= "192.168.178.2", port=9090)
+
+    IMU_WATCH_ROLE = "imu_watch"
+    VIDEO_ROLE = "video"
+    REQUIRED_ROLES = {IMU_WATCH_ROLE, VIDEO_ROLE}
 
     state = RecordingState()
     stop_event = asyncio.Event()
@@ -52,6 +56,19 @@ async def main() -> None:
 
     active_trial: TrialOutput | None = None
     active_reservation: TrialReservation | None = None
+
+    def require_experiment_clients() -> bool:
+        missing = server.missing_roles(REQUIRED_ROLES)
+
+        if not missing:
+            return True
+
+        print(
+            "Cannot start trial; missing client role(s)",
+            ", ".join(sorted(missing)),
+        )
+
+        return False
 
     def close_video_writer() -> None:
         nonlocal video_writer
@@ -101,6 +118,10 @@ async def main() -> None:
                 print("Set a participant_id with 'p' before starting a trial")
                 return
 
+            if not require_experiment_clients():
+                print("Cannot start trial; Not all required client role(s) are set")
+                return
+
             try:
                 prepared_reservation = metadata_store.begin_trial(
                     state.participant_id,
@@ -133,7 +154,7 @@ async def main() -> None:
                 f"{prepared_trial.trial_directory}"
             )
 
-            await server.send_command("prepare_trial_sync")
+            await server.send_command_to_role(IMU_WATCH_ROLE,"prepare_trial_sync")
 
             try:
                 await asyncio.wait_for(pre_sync_event.wait(), timeout=30.0)
@@ -150,7 +171,28 @@ async def main() -> None:
             prepared_trial.begin_staging(int(pre_sync_result["boundaryPhoneNs"]))
 
             state.recording = True
-            await server.send_command("start_streaming")
+
+            try:
+                # send correct command to separate clients
+                await asyncio.gather(
+                    server.send_command_to_role(
+                        IMU_WATCH_ROLE,
+                        "start_imu_watch_streaming",
+                        imuHz=100,
+                        watchHz=100,
+                    ),
+                    server.send_command_to_role(
+                        VIDEO_ROLE,
+                        "start_video_streaming",
+                        videoFps=30,
+                    ),
+                )
+
+            except Exception as error:
+                print("Could not start streaming:", repr(error))
+                fail_active_trial(reason="streaming_failed")
+                return
+
             print("\n🔴 Started recording")
             return
 
@@ -161,8 +203,8 @@ async def main() -> None:
         post_sync_event.clear()
         watch_drain_event.clear()
 
-        await server.send_command("post_trial_sync")
-        await server.send_command("stop_streaming")
+        await server.send_command_to_role(VIDEO_ROLE,"stop_streaming")
+        await server.send_command_to_role(IMU_WATCH_ROLE,"post_trial_sync")
 
         try:
             await asyncio.wait_for(post_sync_event.wait(), timeout=30.0)
@@ -171,16 +213,24 @@ async def main() -> None:
             fail_active_trial(reason="post_sync_timed_out")
             return
 
+        if post_sync_result is None:
+            print("Post-sync failed")
+            await server.send_command_to_role(IMU_WATCH_ROLE, "stop_streaming")
+            fail_active_trial(reason="post_sync_failed")
+            return
+
+        await server.send_command_to_role(IMU_WATCH_ROLE, "stop_streaming")
+
         try:
             await asyncio.wait_for(watch_drain_event.wait(), timeout=60.0)
         except asyncio.TimeoutError:
             print("Watch drain timed out")
+            await server.send_command_to_role(IMU_WATCH_ROLE, "stop_streaming")
             fail_active_trial(reason="watch_drain_timed_out")
             return
 
         if (
-            post_sync_result is None
-            or watch_drain_result is None
+            watch_drain_result is None
             or active_trial is None
             or active_reservation is None
         ):
@@ -348,13 +398,25 @@ async def main() -> None:
         writer.write(cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR))
 
     async def on_connect(client_id: str) -> None:
-        state.imu_phone_connected = True
-        state.video_phone_connected = True
-        print(f"Client connected: {client_id}")
+        print(f"Client connected; awaiting role handshake: {client_id}")
+
+    async def on_client_role(client_id: str, role: str, _handshake: dict[str, Any]) -> None:
+        if role == IMU_WATCH_ROLE:
+            state.imu_phone_connected = True
+        elif role == VIDEO_ROLE:
+            state.video_phone_connected = True
+
+        print(f"Client ready: {role} ({client_id})")
+
+    async def on_client_role_disconnect(client_id: str, role: str) -> None:
+        if role == IMU_WATCH_ROLE:
+            state.imu_phone_connected = False
+        elif role == VIDEO_ROLE:
+            state.video_phone_connected = False
+
+        print(f"Client disconnected: {role} ({client_id})")
 
     async def on_disconnect(client_id: str) -> None:
-        state.imu_phone_connected = False
-        state.video_phone_connected = False
         print(f"Client disconnected: {client_id}")
 
     async def on_error(error: str, details: str | None) -> None:
@@ -396,6 +458,8 @@ async def main() -> None:
     server.on_watch_sync_result = on_watch_sync_result
     server.on_watch_stream_drained = on_watch_stream_drained
     server.on_error = on_error
+    server.on_client_role = on_client_role
+    server.on_client_role_disconnect = on_client_role_disconnect
 
     key_handlers = {
         "q": quit_program,

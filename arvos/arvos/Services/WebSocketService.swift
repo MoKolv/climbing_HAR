@@ -44,7 +44,12 @@ class WebSocketService: NSObject {
 
     // Small message queue for brief disconnections
     // For streaming-first use case, we drop old messages instead of buffering extensively
-    private var messageQueue: [Data] = []
+    private struct QueuedMessage {
+        let data: Data
+        let asText: Bool
+    }
+    
+    private var messageQueue: [QueuedMessage] = []
     private let maxQueueSize = 10
 
     // Network path monitor for detecting connection changes
@@ -108,19 +113,17 @@ class WebSocketService: NSObject {
 
     private func attemptConnection() {
         guard let url = connectionURL else { return }
-
+        
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
         state = .connecting
-
-        webSocket = urlSession?.webSocketTask(with: url)
-        webSocket?.resume()
-
+        
+        let task = urlSession?.webSocketTask(with: url)
+        webSocket = task
+        task?.resume()
+        
         // Start receiving messages
         receiveMessage()
-
-        // Send handshake after connection
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.sendHandshake()
-        }
     }
 
     func disconnect() {
@@ -150,44 +153,77 @@ class WebSocketService: NSObject {
     /// Send binary message
     func send(data: Data, asText: Bool = false) {
         guard state == .connected else {
-            // Buffer message if offline (small queue for brief disconnections)
-            if messageQueue.count < maxQueueSize {
-                messageQueue.append(data)
-            } else {
-                // Drop oldest message to make room (streaming-first: old data is stale)
-                messageQueue.removeFirst()
-                messageQueue.append(data)
-                droppedMessages += 1
-                if droppedMessages % 50 == 0 {
-                }
-            }
+            enqueue(data: data, asText: asText)
             return
         }
-
-        let message: URLSessionWebSocketTask.Message = asText ? .string(String(data: data, encoding: .utf8) ?? "") : .data(data)
-
-        webSocket?.send(message) { [weak self] error in
-            guard let self = self else { return }
-            if let error = error {
-                self.delegate?.webSocketService(self, didEncounterError: error)
-                self.handleConnectionError()
-            } else {
-                self.bytesSent += Int64(data.count)
-                self.messagesSent += 1
+        sendImmediately(data: data, asText: asText)
+    }
+    
+    private func enqueue(data: Data, asText: Bool) {
+        let queuedMessage = QueuedMessage(data: data, asText: asText)
+        
+        if messageQueue.count > maxQueueSize {
+            messageQueue.removeFirst()
+            droppedMessages += 1
+        }
+        
+        messageQueue.append(queuedMessage)
+    }
+    
+    private func sendImmediately(data: Data, asText: Bool) {
+        let message: URLSessionWebSocketTask.Message
+        
+        if asText {
+            message = .string(String(decoding: data, as: UTF8.self))
+        } else {
+            message = .data(data)
+        }
+        
+        webSocket?.send(message) {[weak self] error in
+            guard let self else { return }
+            
+            if let error {
+                DispatchQueue.main.async {
+                    self.delegate?.webSocketService(self, didEncounterError: error)
+                    self.handleConnectionError()
+                }
+                return
             }
+            self.bytesSent += Int64(data.count)
+            self.messagesSent += 1
         }
     }
 
     /// Send handshake message
-    private func sendHandshake() {
+    private func sendHandshake(on task: URLSessionWebSocketTask) {
         let handshake = HandshakeMessage(timestamp: TimestampManager.shared.now())
-
+        
         do {
-            try send(json: handshake)
-            state = .connected
-            flushMessageQueue()
+            let data = try JSONEncoder().encode(handshake)
+            let text = String(decoding: data, as: UTF8.self)
+            
+            task.send(.string(text)) { [weak self, weak task] error in
+                guard let self, let task else { return }
+                
+                DispatchQueue.main.async {
+                    guard self.webSocket == task else { return }
+                    
+                    if let error {
+                        self.delegate?.webSocketService(self, didEncounterError: error)
+                        self.handleConnectionError()
+                        return
+                    }
+                    
+                    self.bytesSent += Int64(data.count)
+                    self.messagesSent += 1
+                    self.reconnectAttempts = 0
+                    self.state = .connected
+                    self.flushMessageQueue()
+                }
+            }
         } catch {
             delegate?.webSocketService(self, didEncounterError: error)
+            handleConnectionError()
         }
     }
 
@@ -195,13 +231,14 @@ class WebSocketService: NSObject {
     private func flushMessageQueue() {
         guard state == .connected else { return }
 
-        let queue = messageQueue
+        let queuedMessages = messageQueue
         messageQueue.removeAll()
 
-        for data in queue {
-            send(data: data, asText: false)
+        for message in queuedMessages {
+            send(data: message.data, asText: message.asText)
         }
     }
+    
 
     // MARK: - Receiving Messages
 
@@ -312,14 +349,21 @@ class WebSocketService: NSObject {
 
 extension WebSocketService: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-        // Connection opened
+        DispatchQueue.main.async {
+            guard self.webSocket === webSocketTask else {return}
+            self.sendHandshake(on: webSocketTask)
+        }
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        if shouldReconnect {
-            handleConnectionError()
-        } else {
-            state = .disconnected
+        DispatchQueue.main.async {
+            guard self.webSocket === webSocketTask else {return}
+            
+            if self.shouldReconnect {
+                self.handleConnectionError()
+            } else {
+                self.state = .disconnected
+            }
         }
     }
 }

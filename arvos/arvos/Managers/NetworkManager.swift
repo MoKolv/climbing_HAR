@@ -651,6 +651,38 @@ extension NetworkManager: WebSocketServiceDelegate {
     func webSocketService(_ service: WebSocketService, didEncounterError error: Error) {
         sendError("websocket_error", details: error.localizedDescription)
     }
+    
+    private func startExperimentStreaming(_ configuration: ModeConfiguration) {
+        DispatchQueue.main.async {
+            SensorManager.shared.applyCustomConfiguration(configuration)
+            SensorManager.shared.startStreaming()
+        }
+    }
+    
+    private func stopExperimentStreaming() {
+        DispatchQueue.main.async {
+            SensorManager.shared.stopStreaming()
+        }
+    }
+    
+    private func integertParameter(_ key: String, in json: [String: Any], default defaultValue: Int) -> Int {
+        if let value = json[key] as? Int {
+            return value
+        }
+        
+        if let value = json[key] as? NSNumber {
+            return value.intValue
+        }
+        
+        if
+            let value = json[key] as? String,
+            let parsedValue = Int(value)
+        {
+            return parsedValue
+        }
+        
+        return defaultValue
+    }
 
     private func handleCommand(_ json: [String: Any]) {
         // Handle server commands (e.g., change mode, start/stop recording)
@@ -659,7 +691,16 @@ extension NetworkManager: WebSocketServiceDelegate {
             return
         }
         
+        let localRole = ExperimentClientIdentity.role.rawValue
+        
+        if let targetRole = json["targetRole"] as? String,
+           targetRole != ExperimentClientIdentity.role.rawValue {
+            print("Ignoring command for role \(targetRole)" + " this client is \(localRole)")
+            return
+        }
+        
         print("NetworkManager received command:", command)
+               
 
         switch command {
         case "start_recording":
@@ -679,16 +720,12 @@ extension NetworkManager: WebSocketServiceDelegate {
                     return
                 }
                 
-                let boundary = Constants.Time.now()
-                self.sendWatchSyncResult(result, boundaryPhoneNs: boundary)
-        
+                self.sendWatchSyncResult(result, boundaryPhoneNs: Constants.Time.now())
             }
         
         case "post_trial_sync":
             print("Post trial sync request")
-            
-            let boundary = Constants.Time.now()
-            
+                    
             WatchSensorManager.shared.synchronizeForTrial(phase: "post") { [weak self] result in
                 
                 guard let self,
@@ -698,7 +735,7 @@ extension NetworkManager: WebSocketServiceDelegate {
                     return
                 }
                 
-                self.sendWatchSyncResult(result, boundaryPhoneNs: boundary)
+                self.sendWatchSyncResult(result, boundaryPhoneNs: Constants.Time.now())
             }
             
         case "start_streaming":
@@ -706,11 +743,22 @@ extension NetworkManager: WebSocketServiceDelegate {
             DispatchQueue.main.async {
                 SensorManager.shared.startStreaming()
             }
-        case "stop_streaming":
-            print("Remote stop streaming request")
-            DispatchQueue.main.async {
-                SensorManager.shared.stopStreaming()
-            }
+        case "start_imu_watch_streaming":
+            var configuration = StreamMode.experimentIMUWatch.config
+            configuration.imuHz = integertParameter("imuHz", in: json, default: configuration.imuHz)
+            configuration.watchHz = integertParameter("watchHz", in: json, default: configuration.watchHz)
+            startExperimentStreaming(configuration)
+            
+        case "start_video_streaming":
+            var configuartion = StreamMode.experimentVideo.config
+            configuartion.cameraFPS = integertParameter("videoFPS", in: json, default: configuartion.cameraFPS)
+            startExperimentStreaming(StreamMode.experimentVideo.config)
+        case "stop_imu_watch_streaming",
+             "stop_video_streaming",
+             "stop_streaming":
+            stopExperimentStreaming()
+            
+
         case "change_mode":
             if let modeString = json["mode"] as? String,
                let mode = StreamMode.allCases.first(where: { $0.rawValue == modeString }) {

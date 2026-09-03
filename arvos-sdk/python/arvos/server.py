@@ -9,6 +9,8 @@ import qrcode
 from typing import Set, Optional, Callable, Awaitable
 from datetime import datetime
 import socket
+import inspect
+
 
 
 class ArvosServer:
@@ -25,14 +27,22 @@ class ArvosServer:
         >>>
         >>> await server.start()
     """
+    VALID_CLIENT_ROLES = {"imu_watch", "video"}
 
     def __init__(self, host: str = "0.0.0.0",alt_host: Optional[str] = None, port: int = 9090):
         self.host = host
         self.alt_host = alt_host
         self.port = port
         self.clients: Set[websockets.WebSocketServerProtocol] = set()
-        self.latest_handshake: Optional[str] = None
-        self.handshake_sender: Optional[websockets.WebSocketServerProtocol] = None
+
+        self.role_by_socket: dict[websockets.WebSocketServerProtocol, str] = {}
+        self.socket_by_role: dict [str, websockets.WebSocketServerProtocol] = {}
+        self.client_info_by_role: dict[str, dict[str, Any]] = {}
+
+        self.on_client_role: Optional[Callable[[str, str, dict[str, Any]], Awaitable[None] | None]] = None
+        self.on_client_role_disconnect: Optional[
+            Callable[[str, str], Awaitable[None]]
+        ] = None
 
         # Callbacks - users can assign these
         self.on_connect: Optional[Callable[[str], Awaitable[None]]] = None
@@ -109,52 +119,185 @@ class ArvosServer:
             print(f"Server listening...")
             await asyncio.Future()  # Run forever
 
+    async def _invoke_callback(self, callback, *args) -> None:
+        if callback is None:
+            return
+
+        result = callback(*args)
+        if inspect.isawaitable(result):
+            await result
+
+    def has_role(self, role: str) -> bool:
+        return role in self.socket_by_role
+
+    def missing_roles(self, roles: set[str]) -> set[str]:
+        return roles - set(self.socket_by_role)
+
+    def role_info(self, role: str) -> dict[str, Any] | None:
+        return self.client_info_by_role.get(role)
+
+    async def _register_client_role(
+            self,
+            client_id: str,
+            websocket: websockets.WebSocketServerProtocol,
+            message: str
+    ) -> bool:
+        try:
+            data = json.loads(message)
+        except json.JSONDecodeError:
+            return False
+
+        if not isinstance(data, dict) or data.get("type") != "handshake":
+            return False
+
+        role = data.get("clientRole")
+        installation_id = (data.get("installationId") or data.get("installationID"))
+
+        if (
+            role not in self.VALID_CLIENT_ROLES
+            or not isinstance(installation_id, str)
+            or not installation_id.strip()
+        ):
+            print(f"Ignoring invalid client handshake from {client_id}: {data}")
+            return False
+
+        previous_socket = self.socket_by_role.get(role)
+
+        self.role_by_socket[websocket] = role
+        self.socket_by_role[role] = websocket
+        self.client_info_by_role[role] = {
+            "client_id": client_id,
+            "installation_id": installation_id,
+            "device_name": data.get("deviceName", "Unknown"),
+            "device_model": data.get("deviceModel", "Unknown"),
+        }
+
+        print(
+            f"registered {role}: {data.get('deviceName', 'Unknown')}"
+            f"({installation_id})"
+        )
+
+        await self._invoke_callback(self.on_client_role, client_id, role, data)
+
+        if previous_socket is not None and previous_socket is not websocket:
+            await previous_socket.close(
+                code=4001,
+                reason = "A newer client claimed this experiment role"
+            )
+
+        return True
+
+    async def send_command_to_role(
+            self,
+            role: str,
+            command: str,
+            **parameters: Any,
+    ) -> None:
+
+        websocket = self.socket_by_role.get(role)
+        if websocket is None:
+            raise RuntimeError(
+                f"Cannot send {command}: {role} client is not connected"
+            )
+
+        message = {
+            "type": "command",
+            "command": command,
+            "targetRole": role,
+            **parameters,
+        }
+
+        try:
+            await websocket.send(json.dumps(message))
+        except websockets.exceptions.ConnectionClosed as error:
+            if self.socket_by_role.get(role) is websocket:
+                self.socket_by_role.pop(role, None)
+
+            raise RuntimeError(
+                f"Cannot send {command}: {role} client is not connected"
+            ) from error
+
+        print(f"Sent {command}: to {role}: {message}")
+
     async def _handle_client(
         self,
         websocket: websockets.WebSocketServerProtocol,
         path: Optional[str] = None,
     ):
-        """Handle new client connection"""
-        client_id = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+        """ Register client's role before accepting sensor messages."""
+        del path
+
+        remote_address = websocket.remote_address
+
+        client_id = (
+            f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+            if remote_address
+            else "unknown"
+        )
+
         self.clients.add(websocket)
 
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Client connected: {client_id}")
 
-        if self.on_connect:
-            await self.on_connect(client_id)
-
-        # Send cached handshake so late joiners know device capabilities
-        if self.latest_handshake and websocket is not self.handshake_sender:
-            try:
-                await websocket.send(self.latest_handshake)
-            except websockets.exceptions.ConnectionClosed:
-                pass
+        await self._invoke_callback(self.on_connect, client_id)
 
         try:
+            try:
+                first_message = await asyncio.wait_for(
+                    websocket.recv(),
+                    timeout = 5,
+                )
+            except asyncio.TimeoutError:
+                print(f"Role handshake timed out: {client_id}")
+                await websocket.close(
+                    code=4000,
+                    reason = "Role handshake required"
+                )
+                return
+
+            if not isinstance(first_message, str):
+                print(f"Expected text role handshake from {client_id}")
+                await websocket.close(
+                    code=4000,
+                    reason = "Text role handshake required"
+                )
+                return
+
+            registered = await self._register_client_role(client_id, websocket, first_message)
+
+            if not registered:
+                print(f"Invalid role handshake from {client_id}")
+                await websocket.close(
+                    code=4000,
+                    reason = "Invalid role handshake"
+                )
+                return
+
+            await self._invoke_callback(self.on_message, client_id, first_message)
+
+            await self._delegate_message(first_message)
+
             async for message in websocket:
-                if isinstance(message, str):
-                    self._cache_handshake(message, websocket)
-
-                if self.on_message:
-                    await self.on_message(client_id, message)
-
-                # Delegate to specific handlers
+                await self._invoke_callback(self.on_message, client_id, message)
                 await self._delegate_message(message)
-
-                await self._broadcast(message, exclude=websocket)
-
         except websockets.exceptions.ConnectionClosed:
             pass
+        except Exception as error:
+            pring(f"Client handler faild for: {client_id}: {error!r}")
         finally:
-            self.clients.remove(websocket)
+            self.clients.discard(websocket)
+
+            role = self.role_by_socket.pop(websocket, None)
+
+            # Don't remove a newer socket that replaced this role
+            if role and self.socket_by_role.get(role) is websocket:
+                self.socket_by_role.pop(role, None)
+                self.client_info_by_role.pop(role, None)
+
+                await self._invoke_callback(self.on_client_role_disconnect, client_id, role)
+
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Client disconnected: {client_id}")
-
-            if self.on_disconnect:
-                await self.on_disconnect(client_id)
-
-            if websocket is self.handshake_sender:
-                self.handshake_sender = None
-                self.latest_handshake = None
+            await self._invoke_callback(self.on_disconnect, client_id)
 
     async def _delegate_message(self, message):
 
@@ -281,26 +424,6 @@ class ArvosServer:
     def get_client_count(self) -> int:
         """Get number of connected clients"""
         return len(self.clients)
-
-    async def _broadcast(self, message, exclude: Optional[websockets.WebSocketServerProtocol] = None):
-        """Broadcast message to all clients except the sender"""
-        if not self.clients:
-            return
-
-        targets = [client for client in self.clients if client is not exclude]
-        if not targets:
-            return
-
-        await asyncio.gather(
-            *[client.send(message) for client in targets],
-            return_exceptions=True
-        )
-
-    def _cache_handshake(self, message: str, websocket: websockets.WebSocketServerProtocol):
-        try:
-            data = json.loads(message)
-        except json.JSONDecodeError:
-            return
 
         msg_type = data.get("type") or data.get("sensorType")
         if msg_type == "handshake":

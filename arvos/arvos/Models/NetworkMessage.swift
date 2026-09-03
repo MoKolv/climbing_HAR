@@ -133,6 +133,9 @@ struct HandshakeMessage: Codable {
     let appVersion: String
     let capabilities: DeviceCapabilities
     let timestampNs: UInt64
+    
+    let clientRole: String
+    let installationID: String
 
     init(timestamp: UInt64) {
         self.type = "handshake"
@@ -142,6 +145,8 @@ struct HandshakeMessage: Codable {
         self.appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
         self.capabilities = DeviceCapabilities()
         self.timestampNs = timestamp
+        self.clientRole = ExperimentClientIdentity.role.rawValue
+        self.installationID = ExperimentClientIdentity.installaionID
     }
 }
 

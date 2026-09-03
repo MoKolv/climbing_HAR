@@ -13,7 +13,8 @@ struct SettingsView: View {
     @State private var imuHz: Double = 100
     @State private var depthFPS: Double = 10
     @State private var poseHz: Double = 30
-
+    @State private var experimentRole = ExperimentClientIdentity.role
+    
     // Collapsible sections
     @State private var showPerformance = false
     @State private var showSensorStatus = false
@@ -107,6 +108,23 @@ struct SettingsView: View {
                     }
                 } header: {
                     Text("Motion Sensors")
+                }
+                
+                Section {
+                    Picker("Experiment_role", selection: $experimentRole) {
+                        ForEach(ExperimentClientRole.allCases) { role in
+                            Text(role.displayName).tag(role)
+                        }
+                    }
+                    .onChange(of: experimentRole) { newRole in
+                        ExperimentClientIdentity.role = newRole
+                    }
+                    
+                    Text("Reconnect after changing the role.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } header: {
+                    Text("Experiment Client")
                 }
 
                 // MARK: - Diagnostics (Collapsible)

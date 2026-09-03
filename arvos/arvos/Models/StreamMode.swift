@@ -17,6 +17,8 @@ enum StreamMode: String, Codable, CaseIterable, Identifiable {
     case fullSensor = "Full Sensor"
     case lowPower = "Low Power"
     case custom = "Custom"
+    case experimentIMUWatch = "Experiment IMU + Watch"
+    case experimentVideo = "Experiment Video"
 
     var id: String { rawValue }
 
@@ -39,6 +41,10 @@ enum StreamMode: String, Codable, CaseIterable, Identifiable {
             return "Minimal sensors\n(Battery saver)"
         case .custom:
             return "Choose specific sensors\n(Custom configuration)"
+        case .experimentIMUWatch:
+            return "Watch + Phone IMU at 100 hz recording rate"
+        case .experimentVideo:
+            return "Only camera at 30 FPS"
         }
     }
 
@@ -61,6 +67,10 @@ enum StreamMode: String, Codable, CaseIterable, Identifiable {
             return "battery.100"
         case .custom:
             return "slider.horizontal.3"
+        case .experimentIMUWatch:
+            return "gyroscope"
+        case .experimentVideo:
+            return "camera"
         }
     }
 
@@ -200,6 +210,38 @@ enum StreamMode: String, Codable, CaseIterable, Identifiable {
                 gpsEnabled: false,
                 watchEnabled: true,
                 watchHz: 100 ,
+                recordingEnabled: false,
+                autoDuration: nil
+            )
+        case .experimentIMUWatch:
+            return ModeConfiguration(
+                cameraEnabled: false,
+                cameraFPS: 30,
+                depthEnabled: false,
+                depthFPS: 10,
+                imuEnabled: true,
+                imuHz: 100,
+                poseEnabled: false,
+                poseHz: 60,
+                gpsEnabled: false,
+                watchEnabled: true,
+                watchHz: 100,
+                recordingEnabled: false,
+                autoDuration: nil
+            )
+        case .experimentVideo:
+            return ModeConfiguration(
+                cameraEnabled: true,
+                cameraFPS: 30,
+                depthEnabled: false,
+                depthFPS: 10,
+                imuEnabled: false,
+                imuHz: 100,
+                poseEnabled: false,
+                poseHz: 60,
+                gpsEnabled: false,
+                watchEnabled: false,
+                watchHz: 100,
                 recordingEnabled: false,
                 autoDuration: nil
             )
