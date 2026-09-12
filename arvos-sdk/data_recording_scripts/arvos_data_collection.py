@@ -61,6 +61,10 @@ async def main() -> None:
     active_trial: TrialOutput | None = None
     active_reservation: TrialReservation | None = None
 
+    debug_mode = False
+    active_trial_roles: set [str] = set()
+    active_watch_expected = False
+
     def require_experiment_clients() -> bool:
         missing = server.missing_roles(REQUIRED_ROLES)
 
@@ -74,18 +78,69 @@ async def main() -> None:
 
         return False
 
+    def select_trial_roles() -> set[str] | None:
+        missing_roles = server.missing_roles(REQUIRED_ROLES)
+        connected_roles = REQUIRED_ROLES - missing_roles
+
+        if not missing_roles:
+            return set(REQUIRED_ROLES)
+
+        connected_text = (
+            ", ".join(sorted(connected_roles))
+            if connected_roles
+            else "none"
+        )
+
+        missing_text = ", ".join(sorted(missing_roles))
+
+        if not debug_mode:
+            print("\n❌ Cannot start trial: required clients are missing.")
+            print(f"Connected roles: {connected_text}")
+            print(f"Missing roles: {missing_text}")
+            print(
+                "Connect missing clients, or pres 'd' to enable "
+                "debug mode for partial trial recording."
+            )
+
+            return None
+
+        if not connected_roles:
+            print("\nCannot start debug trial: no clients connected.")
+            print(f"Required roles: {', '.join(sorted(REQUIRED_ROLES))}")
+            return None
+
+        print(
+            "\nDebug mode: recording a partial trial with roles:"
+            f"{connected_text}"
+        )
+
+        print(f"Missing roles: {missing_text}")
+        return None
+
     async def fail_active_trial(reason: str) -> None:
         nonlocal active_trial, active_reservation, active_upload_token
+        nonlocal active_trial_roles, active_watch_expected
 
         state.recording = False
 
-        abort_results = await asyncio.gather(
-            server.send_command_to_role(IMU_WATCH_ROLE, "stop_streaming"),
-            server.send_command_to_role(VIDEO_ROLE, "cancel_video_recording"),
-            return_exceptions= True,
+        abort_commands = []
+
+        if IMU_WATCH_ROLE in active_trial_roles:
+            abort_commands.append(
+                server.send_command_to_role(IMU_WATCH_ROLE, "stop_streaming")
+            )
+
+        if VIDEO_ROLE in active_trial_roles:
+            abort_commands.append(
+                server.send_command_to_role(VIDEO_ROLE, "cancel_video_recording")
+            )
+
+        results = await asyncio.gather(
+            *abort_commands,
+            return_exceptions=True,
         )
 
-        for result in abort_results:
+        for result in results:
             if isinstance(result, Exception):
                 print("Could not stop a trial client:", repr(result))
 
@@ -107,6 +162,8 @@ async def main() -> None:
         active_trial = None
         active_reservation = None
         active_upload_token = None
+        active_watch_expected = False
+        active_trial_roles.clear()
 
     async def wait_for_sensor_drain(quiet_seconds: float = 0.5, maximum_wait_seconds: float = 5.0) -> None:
         overall_deadline = monotonic() + maximum_wait_seconds
@@ -131,41 +188,44 @@ async def main() -> None:
 
     async def _start_stop_recording(_: PromptInput) -> None:
         nonlocal pre_sync_result, post_sync_result, watch_drain_result
-        nonlocal active_trial, active_reservation
-        nonlocal active_upload_token
+        nonlocal active_trial, active_reservation, active_upload_token
+        nonlocal active_trial_roles, active_watch_expected
 
         if not state.recording:
             if not state.participant_id:
                 print("Set a participant_id with 'p' before starting a trial")
                 return
 
-            if not require_experiment_clients():
-                print("Cannot start trial; Not all required client role(s) are set")
+            selected_roles = select_trial_roles()
+            if selected_roles is None:
                 return
 
+            active_trial_roles = selected_roles
+            active_watch_expected = False
+
+            has_imu = IMU_WATCH_ROLE in active_trial_roles
+            has_video = VIDEO_ROLE in active_trial_roles
+
+
             try:
-                prepared_reservation = metadata_store.begin_trial(
+                active_reservation = metadata_store.begin_trial(
                     state.participant_id,
                     state.boulder_id,
                 )
 
-                prepared_trial = TrialOutput(
-                    prepared_reservation.trial_directory,
-                    prepared_reservation.trial_number,
+                active_trial = TrialOutput(
+                    active_reservation.trial_directory,
+                    active_reservation.trial_number,
                 )
-
             except Exception as error:
+                active_trial_roles.clear()
                 print("Could not create trial output:", repr(error))
-                active_trial = None
-                active_reservation = None
                 return
-
-            active_reservation = prepared_reservation
-            active_trial = prepared_trial
 
             pre_sync_result = None
             post_sync_result = None
             watch_drain_result = None
+            active_upload_token = None
 
             pre_sync_event.clear()
             post_sync_event.clear()
@@ -176,74 +236,142 @@ async def main() -> None:
                 phone_sync_results[phase].clear()
                 phone_sync_events[phase].clear()
 
-            active_upload_token = upload_server.authorize(
-                active_reservation.trial_directory
-            )
+            if has_video:
+                active_upload_token = upload_server.authorize(
+                    active_reservation.trial_directory
+                )
 
-            trial_id = (
-                f"participant_{active_reservation.participant_id}_"
-                f"trial_{active_reservation.trial_number:03d}"
-            )
+                trial_id = (
+                    f"participant_{active_reservation.participant_id}_"
+                    f"trial_{active_reservation.trial_number:03d}"
+                )
 
-            upload_base_url = (
-                f"http://{server.get_local_ip()}:9091/"
-                f"upload/{active_upload_token}"
-            )
+                upload_base_url = (
+                    f"http://{server.get_local_ip()}:9091/"
+                    f"upload/{active_upload_token}"
+                )
 
-            await server.send_command_to_role(
-                VIDEO_ROLE,
-                "arm_video_recording",
-                trialId = trial_id,
-                videoFps = 30,
-                uploadBaseURL = upload_base_url,
-            )
-            await asyncio.wait_for(video_armed_event.wait(), timeout=15.0)
+                await server.send_command_to_role(
+                    VIDEO_ROLE,
+                    "arm_video_recording",
+                    trialId = trial_id,
+                    videoFps = 30,
+                    uploadBaseURL = upload_base_url,
+                )
 
-            await asyncio.gather(
-                server.send_command_to_role(IMU_WATCH_ROLE, "prepare_trial_sync"),
-                server.send_command_to_role(IMU_WATCH_ROLE, "synchronize_phone_clock", phase = "pre"),
-                server.send_command_to_role(VIDEO_ROLE, "synchronize_phone_clock", phase = "pre"),
-            )
+                await asyncio.wait_for(
+                    video_armed_event.wait(),
+                    timeout = 15.0,
+                )
 
-            await asyncio.gather(
-                asyncio.wait_for(pre_sync_event.wait(), timeout=30.0),
-                asyncio.wait_for(phone_sync_events["pre"].wait(), timeout=30.0),
-            )
+            pre_sync_commands = []
 
-            if pre_sync_result is None:
-                print("Watch pre-trial synchronization failed")
-                await fail_active_trial("pre_sync_failed")
-                return
+            if has_imu:
+                pre_sync_commands.extend([
+                    server.send_command_to_role(
+                        IMU_WATCH_ROLE,
+                        "prepare_trial_sync",
+                    ),
+                    server.send_command_to_role(
+                        IMU_WATCH_ROLE,
+                        "synchronize_phone_clock",
+                        phase = "pre",
+                    )
+                ])
+
+            if has_video:
+                pre_sync_commands.append(
+                    server.send_command_to_role(
+                        VIDEO_ROLE,
+                        "synchronize_phone_clock",
+                        phase = "pre"
+                    )
+                )
+
+            await asyncio.gather(*pre_sync_commands)
+
+            pre_sync_waits = [
+                asyncio.wait_for(
+                    phone_sync_events["pre"].wait(),
+                    timeout = 30.0,
+                )
+            ]
+
+            if has_imu:
+                pre_sync_waits.append(
+                    asyncio.wait_for(
+                        pre_sync_event.wait(),
+                        timeout = 30.0,
+                    )
+                )
+
+            await asyncio.gather(*pre_sync_waits)
+
+            if has_imu:
+                if pre_sync_result is None:
+                    if not debug_mode:
+                        await fail_active_trial("pre_sync_failed")
+                        return
+
+                    print(
+                        "Debug mode: Watch synchronization unavailable;"
+                        "continuing with phone IMU only"
+                    )
+                else:
+                    active_watch_expected = True
 
             start_at_server_ns = monotonic_ns() + 2_000_000_000
-            imu_pre_offset = int(
-                phone_sync_results["pre"][IMU_WATCH_ROLE]["serverMinusPhoneOffsetNs"]
-            )
 
-            start_at_imu_phone_ns = start_at_server_ns - imu_pre_offset
-            active_trial.begin_staging(start_at_imu_phone_ns)
-            await asyncio.gather(
-                server.send_command_to_role(
-                    IMU_WATCH_ROLE,
-                    "start_imu_watch_streaming",
-                    startAtServerNs = start_at_server_ns,
-                    imuHz = 100,
-                    watchHz = 100,
-                ),
+            if has_imu:
+                imu_pre_offset = int(
+                    phone_sync_results["pre"][IMU_WATCH_ROLE]["serverMinusPhoneOffsetNs"]
+                )
 
-                server.send_command_to_role(
-                    VIDEO_ROLE,
-                    "start_video_recording",
-                    startAtServerNs = start_at_server_ns,
-                ),
-            )
+                staging_start_ns = start_at_server_ns - imu_pre_offset
+            else:
+                #Video only trials not staging IMU rows
+                staging_start_ns = start_at_server_ns
+
+            active_trial.begin_staging(staging_start_ns)
+
+            start_commands = []
+
+            if has_imu:
+                start_commands.append(
+                    server.send_command_to_role(
+                        IMU_WATCH_ROLE,
+                        "start_imu_watch_streaming",
+                        startAtServerNs =  start_at_server_ns,
+                        imuHz = 100,
+                        watchHz = 100,
+                    )
+                )
+
+            if has_video:
+                start_commands.append(
+                    server.send_command_to_role(
+                        VIDEO_ROLE,
+                        "start_video_recording",
+                        startAtServerNs = start_at_server_ns,
+                    )
+                )
+
+            await asyncio.gather(*start_commands)
 
             state.recording = True
-            print("\n🔴 Started recording")
+            print(
+                "\n🔴 Started recording role(s):",
+                ", ".join(sorted(active_trial_roles)),
+            )
             return
 
-        print("\n🟥 Stopped recording")
-        print("\nFinalizing trial")
+        has_imu = IMU_WATCH_ROLE in active_trial_roles
+        has_video = VIDEO_ROLE in active_trial_roles
+
+        trial_stop_requested_server_ns = monotonic_ns()
+
+        print("\n🟥 Stopping recording")
+        print("Finalizing trial")
 
         post_sync_result = None
         watch_drain_result = None
@@ -253,102 +381,178 @@ async def main() -> None:
         phone_sync_results["post"].clear()
         phone_sync_events["post"].clear()
 
-        await asyncio.gather(
-            server.send_command_to_role(IMU_WATCH_ROLE, "post_trial_sync"),
-            server.send_command_to_role(IMU_WATCH_ROLE, "synchronize_phone_clock", phase = "post"),
-            server.send_command_to_role(VIDEO_ROLE, "synchronize_phone_clock", phase = "post"),
-        )
+        post_sync_commands = []
 
-        await asyncio.gather(
-            asyncio.wait_for(post_sync_event.wait(), timeout=30.0),
+        if has_imu:
+            if active_watch_expected:
+                post_sync_commands.append(
+                    server.send_command_to_role(
+                        IMU_WATCH_ROLE,
+                        "post_trial_sync",
+                    )
+                )
+
+            post_sync_commands.append(
+                server.send_command_to_role(
+                    IMU_WATCH_ROLE,
+                    "synchronize_phone_clock",
+                    phase = "post",
+                )
+            )
+
+        if has_video:
+            post_sync_commands.append(
+                server.send_command_to_role(
+                    VIDEO_ROLE,
+                    "synchronize_phone_clock",
+                    phase = "post",
+                )
+            )
+
+        await asyncio.gather(*post_sync_commands)
+
+        post_sync_waits = [
             asyncio.wait_for(phone_sync_events["post"].wait(), timeout=30.0),
-        )
+        ]
 
-        if post_sync_result is None:
-            print("Watch post-trial synchronization failed")
-            await fail_active_trial("post_sync_failed")
-            return
+        if active_watch_expected:
+            post_sync_waits.append(
+                asyncio.wait_for(post_sync_event.wait(), timeout=30.0)
+            )
+
+        await asyncio.gather(*post_sync_waits)
+
+        if active_watch_expected and post_sync_result is None:
+            if not debug_mode:
+                await fail_active_trial("post_sync_failed")
+                return
+
+            print(
+                "Debug mode: Watch post-sync failed;"
+                "using the existing adjusted timestamps"
+            )
 
         stop_at_server_ns = monotonic_ns() + 1_000_000_000
-        imu_post_offset = int(
-            phone_sync_results["post"][IMU_WATCH_ROLE]["serverMinusPhoneOffsetNs"]
-        )
 
-        stop_at_imu_phone_ns = stop_at_server_ns - imu_post_offset
+        if has_imu:
+            imu_post_offset = int(
+                phone_sync_results["post"][IMU_WATCH_ROLE]["serverMinusPhoneOffsetNs"]
+            )
+            staging_stop_ns = trial_stop_requested_server_ns - imu_post_offset
+        else:
+            staging_stop_ns = trial_stop_requested_server_ns
 
-        await asyncio.gather(
-            server.send_command_to_role(
-                VIDEO_ROLE,
-                "stop_video_recording",
-                stopAtServerNs = stop_at_server_ns,
-            ),
+        stop_commands = []
 
-            server.send_command_to_role(
-                IMU_WATCH_ROLE,
-                "stop_imu_watch_streaming",
-                stopAtServerNs = stop_at_server_ns,
-            ),
-        )
+        if has_video:
+            stop_commands.append(
+                server.send_command_to_role(
+                    VIDEO_ROLE,
+                    "stop_video_recording",
+                    stopAtServerNs = stop_at_server_ns,
+                )
+            )
 
-        await asyncio.gather(
-            asyncio.wait_for(watch_drain_event.wait(), timeout=60.0),
-            upload_server.wait_for_trial_files(active_upload_token, timeout=300.0),
-        )
+        if has_imu:
+            stop_commands.append(
+                server.send_command_to_role(
+                    IMU_WATCH_ROLE,
+                    "stop_imu_watch_streaming",
+                    stopAtServerNs = stop_at_server_ns,
+                )
+            )
 
-        if watch_drain_result is None:
-            print("Watch did not report its final sample count")
-            await fail_active_trial("watch_drain_result_missing")
-            return
+        await asyncio.gather(*stop_commands)
 
-        await wait_for_sensor_drain()
+        if has_video:
+            if active_upload_token is None:
+                raise RuntimeError("Video trial has no upload token")
 
-        summary = active_trial.finalize(stop_at_imu_phone_ns)
-        summary["watch_transport"] = {
-            "captured_motion_samples": (
-                watch_drain_result["capturedSampleCount"]
-            ),
-        }
+            await upload_server.wait_for_trial_files(
+                active_upload_token,
+                timeout = 300.0,
+            )
+
+        if active_watch_expected:
+            await asyncio.wait_for(watch_drain_event.wait(), timeout=60.0)
+
+        if has_imu:
+            await wait_for_sensor_drain()
+
+
+        summary = active_trial.finalize(staging_stop_ns)
+
+        summary["debug_mode"] = debug_mode
+        summary["recorded_roles"] = sorted(active_trial_roles)
+        summary["partial_trial"] = active_trial_roles != REQUIRED_ROLES
+
+        if watch_drain_result is not None:
+            summary["watch_transport"] = {
+                "captured_motion_samples": (
+                    watch_drain_result["capturedSampleCount"]
+                ),
+            }
 
         active_trial.close()
 
-        imu_phone_model = clock_model({
-            "pre": phone_sync_results["pre"][IMU_WATCH_ROLE],
-            "post": phone_sync_results["post"][IMU_WATCH_ROLE],
-        })
+        if has_imu:
+            imu_phone_model = clock_model({
+                "pre": phone_sync_results["pre"][IMU_WATCH_ROLE],
+                "post": phone_sync_results["post"][IMU_WATCH_ROLE],
+            })
 
-        assert pre_sync_result is not None
-        assert post_sync_result is not None
-
-        watch_phone_model = watch_clock_model({
-            "pre": pre_sync_result,
-            "post": post_sync_result,
-        })
-
-        add_server_timestamps(
-            active_trial.trial_directory / "imu.csv",
-            imu_phone_model,
-        )
-
-        for filename in ("watch_imu.csv", "watch_attitude.csv"):
-            add_watch_server_timestamps(
-                active_trial.trial_directory / filename,
-                watch_phone_model,
+            add_server_timestamps(
+                active_trial.trial_directory / "imu.csv",
                 imu_phone_model,
             )
 
-        add_nearest_imu_to_video(
-            active_trial.trial_directory / "video_timestamps.csv",
-            active_trial.trial_directory / "imu.csv",
-        )
+            if pre_sync_result is not None and post_sync_result is not None:
+                watch_phone_model = watch_clock_model({
+                    "pre": pre_sync_result,
+                    "post": post_sync_result,
+                })
+
+                for filename in ("watch_imu.csv", "watch_attitude.csv"):
+                    add_watch_server_timestamps(
+                        active_trial.trial_directory / filename,
+                        watch_phone_model,
+                        imu_phone_model,
+                    )
+            else:
+                # Debug fallback: timestamps were already adjusted
+                # by the IMU phone using its available watch offset
+                for filename in ("watch_imu.csv", "watch_attitude.csv"):
+                    add_server_timestamps(
+                        active_trial.trial_directory / filename,
+                        imu_phone_model
+                    )
+
+        if has_imu and has_video:
+            try:
+                add_nearest_imu_to_video(
+                    active_trial.trial_directory / "video_timestamps.csv", active_trial.trial_directory / "imu.csv",
+                )
+            except ValueError:
+                if not debug_mode:
+                    raise
+                print(
+                    "Debug mode: no IMU samples available for"
+                    "video-frame matching"
+                )
+
 
         completed_directory = active_reservation.trial_directory
 
         metadata_store.mark_trial_complete(active_reservation, summary)
-        upload_server.revoke(active_upload_token)
+
+        if active_upload_token is not None:
+            upload_server.revoke(active_upload_token)
 
         active_trial = None
         active_reservation = None
         active_upload_token = None
+        active_watch_expected = False
+        active_trial_roles.clear()
         state.recording = False
 
         print(f"\n✅ Trial complete: {completed_directory}")
@@ -392,6 +596,22 @@ async def main() -> None:
         state.boulder_id = (await prompt_input("\nBoulder ID: ")).strip() or None
         print(f"Boulder ID set to: {state.boulder_id} or 'not set'")
 
+    async def toggle_debug_mode(_: PromptInput) -> None:
+        nonlocal debug_mode
+
+        if active_trial is not None:
+            print("Cannot change debug mode while a trial is active")
+            return
+
+        debug_mode = not debug_mode
+
+        print(
+            "Debug mode:",
+            "✅ ON - partial one-phone trials allowed"
+            if debug_mode
+            else "❌ OFF - both phone roles required"
+        )
+
     async def status(_: PromptInput) -> None:
         def connection_message(device: str, connected: bool) -> str:
             return (
@@ -405,6 +625,8 @@ async def main() -> None:
             return "⏸️ Recording paused"
 
         print("\n Status")
+        print("🔧 Debug mode:", "✅ ON" if debug_mode else "❌ OFF")
+
         print(connection_message("IMU_Phone", state.imu_phone_connected))
         print(connection_message("VIDEO_Phone", state.video_phone_connected))
         print(connection_message("Watch", state.watch_connected))
@@ -524,11 +746,12 @@ async def main() -> None:
     async def on_phone_clock_sync_result(role: str, data: dict) -> None:
         phase = data["phase"]
         phone_sync_results[phase][role] = data
+        expected_roles = active_trial_roles or REQUIRED_ROLES
 
         if active_trial is not None:
             active_trial.record_phone_sync_result(role, data)
 
-        if REQUIRED_ROLES <= phone_sync_results[phase].keys():
+        if expected_roles <= phone_sync_results[phase].keys():
             phone_sync_events[phase].set()
 
     async def on_video_recording_armed(role: str, data: dict) -> None:
@@ -554,6 +777,7 @@ async def main() -> None:
         "q": quit_program,
         "r": start_stop_recording,
         "s": status,
+        "d": toggle_debug_mode,
         "p": set_participant_id,
         "b": set_boulder_id,
     }
