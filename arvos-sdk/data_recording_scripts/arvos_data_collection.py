@@ -65,19 +65,6 @@ async def main() -> None:
     active_trial_roles: set [str] = set()
     active_watch_expected = False
 
-    def require_experiment_clients() -> bool:
-        missing = server.missing_roles(REQUIRED_ROLES)
-
-        if not missing:
-            return True
-
-        print(
-            "Cannot start trial; missing client role(s)",
-            ", ".join(sorted(missing)),
-        )
-
-        return False
-
     def select_trial_roles() -> set[str] | None:
         missing_roles = server.missing_roles(REQUIRED_ROLES)
         connected_roles = REQUIRED_ROLES - missing_roles
@@ -115,7 +102,7 @@ async def main() -> None:
         )
 
         print(f"Missing roles: {missing_text}")
-        return None
+        return connected_roles
 
     async def fail_active_trial(reason: str) -> None:
         nonlocal active_trial, active_reservation, active_upload_token

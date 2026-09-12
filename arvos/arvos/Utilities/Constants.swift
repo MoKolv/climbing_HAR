@@ -28,7 +28,7 @@ enum Constants {
     enum Camera {
         static let jpegQuality: CGFloat = 0.25
         static let maxResolution = CGSize(width: 1920, height: 1080)
-        static let h264Bitrate = 5_000_000 // 5 Mbps
+        static let h264Bitrate = 8_000_000 // 8 Mbps
     }
 
     // MARK: - Depth

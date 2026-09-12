@@ -473,9 +473,19 @@ class SensorManager: ObservableObject {
 
         // Remove old timestamps
         frameTimestamps.removeAll { now - $0 > fpsWindow }
-
+        
+        guard
+            frameTimestamps.count >= 2,
+            let first = frameTimestamps.first,
+            let last = frameTimestamps.last,
+            last > first
+        else {
+            currentFPS = 0
+            return
+        }
+        
         // Calculate FPS
-        currentFPS = Double(frameTimestamps.count) / fpsWindow
+        currentFPS = Double(frameTimestamps.count - 1) / (last - first)
     }
 
     // MARK: - Statistics

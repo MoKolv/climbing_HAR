@@ -85,30 +85,31 @@ class CameraService: NSObject {
 //            session.sessionPreset = .high
 //        }
         
-        if session.canSetSessionPreset(.vga640x480) {
-            session.sessionPreset = .vga640x480
-        } else {
-            session.sessionPreset = .medium
-        }
-
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+        guard let camera = AVCaptureDevice.default(
+            .builtInWideAngleCamera,
+            for: .video,
+            position: .back
+        ) else {
             session.commitConfiguration()
             throw CameraError.noCameraAvailable
         }
-
+        
         do {
-            try camera.lockForConfiguration()
-            camera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
-            camera.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
-            camera.unlockForConfiguration()
-
             let input = try AVCaptureDeviceInput(device: camera)
-            if session.canAddInput(input) {
-                session.addInput(input)
-            } else {
+            
+            guard session.canAddInput(input) else {
                 session.commitConfiguration()
                 throw CameraError.cannotAddInput
             }
+            
+            session.addInput(input)
+            
+            try configureCamera(
+                camera,
+                fps: fps,
+                width: 1920,
+                height: 1080
+            )
         } catch {
             session.commitConfiguration()
             throw CameraError.configurationFailed(error)
@@ -117,9 +118,13 @@ class CameraService: NSObject {
         videoOutput = AVCaptureVideoDataOutput()
         videoOutput?.setSampleBufferDelegate(self, queue: sessionQueue)
         videoOutput?.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            kCVPixelBufferPixelFormatTypeKey as String:
+                captureMode == .localVideo
+                ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                : kCVPixelFormatType_32BGRA
         ]
-        videoOutput?.alwaysDiscardsLateVideoFrames = true
+        
+        videoOutput?.alwaysDiscardsLateVideoFrames = captureMode == .jpegNetwork
 
         if let output = videoOutput, session.canAddOutput(output) {
             session.addOutput(output)
@@ -177,6 +182,51 @@ class CameraService: NSObject {
         }
     }
 
+    
+    private func configureCamera(
+        _ camera: AVCaptureDevice,
+        fps: Int,
+        width: Int32,
+        height: Int32
+    ) throws {
+        let requestedFPS = Double(fps)
+        
+        guard let selectedFormat = camera.formats.first(where: { format in
+            let dimensions = CMVideoFormatDescriptionGetDimensions(
+                format.formatDescription
+            )
+            
+            let supportsResolution = dimensions.width == width && dimensions.height == height
+            
+            let supportsFramerate = format.videoSupportedFrameRateRanges.contains { range in
+                requestedFPS >= range.minFrameRate &&
+                requestedFPS <= range.maxFrameRate
+            }
+            
+            return supportsResolution && supportsFramerate
+        }) else {
+            throw CameraError.unsupportedFrameRate(fps)
+        }
+        
+        try camera.lockForConfiguration()
+        defer { camera.unlockForConfiguration() }
+        
+        camera.activeFormat = selectedFormat
+        
+        if #available(iOS 18.0, *),
+           selectedFormat.isAutoVideoFrameRateSupported {
+            camera.isAutoVideoFrameRateEnabled = false
+        }
+        
+        let frameDuration = CMTime(
+            value: 1,
+            timescale: CMTimeScale(fps)
+        )
+        
+        camera.activeVideoMinFrameDuration = frameDuration
+        camera.activeVideoMaxFrameDuration = frameDuration
+    }
+    
     func updateFPS(_ fps: Int) {
         guard fps != targetFPS else { return }
         targetFPS = fps
@@ -347,6 +397,7 @@ enum CameraError: LocalizedError {
     case noCameraAvailable
     case cannotAddInput
     case cannotAddOutput
+    case unsupportedFrameRate(Int)
     case configurationFailed(Error)
 
     var errorDescription: String? {
@@ -357,8 +408,11 @@ enum CameraError: LocalizedError {
             return "Cannot add camera input to capture session"
         case .cannotAddOutput:
             return "Cannot add video output to capture session"
+        case .unsupportedFrameRate(let fps):
+            return "No 1920x1080 camera format supports \(fps) fps."
         case .configurationFailed(let error):
             return "Camera configuration failed: \(error.localizedDescription)"
+        
         }
     }
 }
