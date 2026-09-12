@@ -16,6 +16,7 @@ class SensorManager: ObservableObject {
     @Published private(set) var currentMode: StreamMode = .custom
     @Published private(set) var isStreaming = false
     @Published private(set) var currentFPS: Double = 0
+    @Published private(set) var currentIMUMagnitude: Double = 0
     @Published private(set) var sensorStatuses: SensorStatuses = SensorStatuses()
     @Published private(set) var latestDepthFrame: DepthFrame?
     // Removed latestDepthSample to avoid ARFrame retention issues
@@ -30,6 +31,14 @@ class SensorManager: ObservableObject {
         }
         return currentMode.config
     }
+    
+    enum LocalVideoTrialError: LocalizedError {
+        case alreadyActive
+        
+        var errorDescription: String? {
+            "A video trial is already active"
+        }
+    }
 
     // Services (exposed for sensor test view)
     let cameraService = CameraService()
@@ -42,6 +51,7 @@ class SensorManager: ObservableObject {
     // Managers
     private let networkManager = NetworkManager.shared
     private let recordingManager = RecordingManager()
+    private var localVideoRecorder: VideoRecorder?
 
     private var cameraServiceRunning = false
     var usingARKitCamera = false // Exposed for sensor test view
@@ -83,6 +93,11 @@ class SensorManager: ObservableObject {
 
     func startStreaming() {
         guard !isStreaming else { return }
+        
+        sensorStatuses = SensorStatuses()
+        frameTimestamps.removeAll()
+        currentFPS = 0
+        currentIMUMagnitude = 0
 
         let config = currentConfig
 
@@ -281,6 +296,9 @@ class SensorManager: ObservableObject {
         isStreaming = false
         sensorStatuses = SensorStatuses()
         latestDepthFrame = nil
+        currentFPS = 0
+        currentIMUMagnitude = 0
+        frameTimestamps.removeAll()
 
         networkManager.sendStatus("stopped")
     }
@@ -292,6 +310,99 @@ class SensorManager: ObservableObject {
 
     func resumeStreaming() {
         arKitService.resume()
+    }
+    
+    func armLocalVideoTrial(
+        trialId: String,
+        fps: Int,
+        uploadBaseURL: URL,
+    ) throws {
+        guard !isStreaming, localVideoRecorder == nil else {
+            throw LocalVideoTrialError.alreadyActive
+        }
+        
+        sensorStatuses = SensorStatuses()
+        frameTimestamps.removeAll()
+        currentFPS = 0
+        currentIMUMagnitude = 0
+        
+        var configuration = StreamMode.experimentVideo.config
+        configuration.cameraFPS = fps
+        applyCustomConfiguration(configuration)
+        
+        let recorder = try VideoRecorder(
+            trialId: trialId,
+            fps: fps,
+            uploadBaseURL: uploadBaseURL
+        )
+        
+        do {
+            try cameraService.configure(
+                fps: fps,
+                captureMode: .localVideo
+            )
+        } catch {
+            recorder.cancel()
+            throw error
+        }
+        
+        localVideoRecorder = recorder
+        cameraService.start()
+        cameraServiceRunning = true
+        sensorStatuses.camera = .active
+        
+    }
+    
+    func beginLocalVideoRecording(atPhoneTimestampNs timestampNs: UInt64) {
+        guard let localVideoRecorder else {return}
+        localVideoRecorder.start(atPhoneTimestampsNs: timestampNs)
+        isStreaming = true
+        networkManager.sendStatus("streaming")
+    }
+    
+    func cancelLocalVideoTrial() {
+        guard let recorder = localVideoRecorder else {return}
+        
+        cameraService.stop {[weak self] in
+            recorder.cancel()
+            
+            guard let self else { return }
+            
+            localVideoRecorder = nil
+            cameraServiceRunning = false
+            isStreaming = false
+            currentFPS = 0
+            frameTimestamps.removeAll()
+            sensorStatuses = SensorStatuses()
+            
+            networkManager.sendStatus("stopped")
+        }
+    }
+    
+    func finishLocalVideoRecording(
+        stopAtPhoneTimestampNs: UInt64,
+        preSync: PhoneClockSyncResult,
+        postSync: PhoneClockSyncResult,
+        completion: @escaping (Result<CompletedLocalVideo, Error>) -> Void
+    ) {
+        guard let recorder = localVideoRecorder else {
+            completion(.failure(VideoRecorder.RecorderError.noFrames))
+            return
+        }
+        
+        recorder.stopAcceptingFrames(atPhoneTimestampsNs: stopAtPhoneTimestampNs)
+        cameraService.stop {[weak self] in
+            recorder.finish(preSync: preSync, postSync: postSync) { result in
+                self?.localVideoRecorder = nil
+                self?.cameraServiceRunning = false
+                self?.isStreaming = false
+                self?.currentFPS = 0
+                self?.frameTimestamps.removeAll()
+                self?.sensorStatuses = SensorStatuses()
+                self?.networkManager.sendStatus("stopped")
+                completion(result)
+            }
+        }
     }
 
     // MARK: - Burst Scan
@@ -398,6 +509,18 @@ extension SensorManager: CameraServiceDelegate {
             recordingManager.record(cameraFrame: frame)
         }
     }
+    
+    func cameraService(
+        _ service: CameraService,
+        didCaptureVideoSample sampleBuffer: CMSampleBuffer,
+        phoneTimestampNs: UInt64
+    ) {
+        let wasRecorded = localVideoRecorder?.append(sampleBuffer: sampleBuffer, phoneTimestampNs: phoneTimestampNs) ?? false
+        
+        if wasRecorded {
+            updateFPS()
+        }
+    }
 
     func cameraService(_ service: CameraService, didEncounterError error: Error) {
         sensorStatuses.camera = .error
@@ -471,6 +594,17 @@ extension SensorManager: IMUServiceDelegate {
             print("⚠️ IMU data blocked - imuEnabled: false")
             #endif
             return
+        }
+        
+        let acceleration = data.linearAcceleration
+        let magnitude = sqrt(
+            acceleration.x * acceleration.x +
+            acceleration.y * acceleration.y +
+            acceleration.z * acceleration.z
+        )
+        
+        DispatchQueue.main.async{
+            self.currentIMUMagnitude = magnitude
         }
         
         // Stream to network

@@ -6,10 +6,11 @@ import asyncio
 import websockets
 import json
 import qrcode
-from typing import Set, Optional, Callable, Awaitable
+from typing import Set, Optional, Callable, Awaitable, Any
 from datetime import datetime
 import socket
 import inspect
+from time import monotonic_ns
 
 
 
@@ -42,6 +43,18 @@ class ArvosServer:
         self.on_client_role: Optional[Callable[[str, str, dict[str, Any]], Awaitable[None] | None]] = None
         self.on_client_role_disconnect: Optional[
             Callable[[str, str], Awaitable[None]]
+        ] = None
+
+        self.on_phone_clock_sync_result: Optional[
+            Callable[[str, dict[str, Any]], Awaitable[None] | None]
+        ] = None
+
+        self.on_video_recording_armed: Optional[
+            Callable[[str, dict[str, Any]], Awaitable[None] | None]
+        ] = None
+
+        self.on_video_upload_finished: Optional[
+            Callable[[str, dict[str, Any]], Awaitable[None] | None]
         ] = None
 
         # Callbacks - users can assign these
@@ -219,6 +232,60 @@ class ArvosServer:
 
         print(f"Sent {command}: to {role}: {message}")
 
+    async def _handle_control_message(
+            self,
+            websocket: websockets.WebSocketServerProtocol,
+            role: str,
+            message: str,
+            server_receive_ns: int,
+    ) -> bool:
+        try:
+            data = json.loads(message)
+        except json.JSONDecodeError:
+            return False
+
+        if not isinstance(data, dict):
+            return False
+
+        message_type = data.get("type")
+
+        if message_type  == "phone_clock_sync_ping":
+            response = {
+                "type": "phone_clock_sync_response",
+                "sequenceId": data.get("sequenceId"),
+                "clientSendNs": data.get("clientSendNs"),
+                "serverReceiveNs": server_receive_ns,
+                "serverSendNs": monotonic_ns()
+            }
+            await websocket.send(json.dumps(response))
+            return True
+
+        if message_type == "phone_clock_sync_result":
+            await self._invoke_callback(
+                self.on_phone_clock_sync_result,
+                role,
+                data
+            )
+            return True
+
+        if message_type == "video_recording_armed":
+            await self._invoke_callback(
+                self.on_video_recording_armed,
+                role,
+                data
+            )
+            return True
+
+        if message_type == "video_upload_finished":
+            await self._invoke_callback(
+                self.on_video_upload_finished,
+                role,
+                data
+            )
+            return True
+
+        return False
+
     async def _handle_client(
         self,
         websocket: websockets.WebSocketServerProtocol,
@@ -278,12 +345,24 @@ class ArvosServer:
             await self._delegate_message(first_message)
 
             async for message in websocket:
+                server_receive_ns = monotonic_ns()
+
+                if isinstance(message, str):
+                    role = self.role_by_socket.get(websocket)
+                    if role and await self._handle_control_message(
+                        websocket,
+                        role,
+                        message,
+                        server_receive_ns,
+                    ):
+                        continue
+
                 await self._invoke_callback(self.on_message, client_id, message)
                 await self._delegate_message(message)
         except websockets.exceptions.ConnectionClosed:
             pass
         except Exception as error:
-            pring(f"Client handler faild for: {client_id}: {error!r}")
+            print(f"Client handler faild for: {client_id}: {error!r}")
         finally:
             self.clients.discard(websocket)
 

@@ -34,6 +34,7 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "websockets>=11.0",
+        "aiohttp>=3.9",
         "qrcode[pil]>=7.4",
         "numpy>=1.20.0",
     ],

@@ -124,7 +124,7 @@ class ParticipantMetadataStore:
         trial = self._find_trial(metadata, reservation.trial_number)
 
         trial.update(summary)
-        trial["status"] = "failed"
+        trial["status"] = "complete"
         trial["finished_at"] = now_iso()
 
         self._write(reservation.participant_id, metadata)

@@ -188,6 +188,9 @@ extension SensorTestViewModel: CameraServiceDelegate {
             }
         }
     }
+    func cameraService(_ service: CameraService, didCaptureVideoSample sampleBuffer: CMSampleBuffer, phoneTimestampNs: UInt64) {
+        
+    }
 
     func cameraService(_ service: CameraService, didEncounterError error: Error) {
     }

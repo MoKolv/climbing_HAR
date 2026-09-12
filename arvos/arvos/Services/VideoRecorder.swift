@@ -7,238 +7,282 @@
 
 import Foundation
 import AVFoundation
-import UIKit
 
-class VideoRecorder {
-    private var assetWriter: AVAssetWriter?
-    private var videoInput: AVAssetWriterInput?
-    private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
+struct CompletedLocalVideo{
+    let trialId: String
+    let uploadBaseURL: URL
+    let videoURL: URL
+    let sidecarURL: URL
+}
 
-    private let outputURL: URL
-    private var isRecording = false
-    private var frameCount = 0
-    private var startTime: CMTime?
-
-    private let videoSettings: [String: Any]
-
-    // MARK: - Initialization
-
-    init(outputURL: URL, width: Int, height: Int, fps: Int) throws {
-        self.outputURL = outputURL
-
-        // Video settings
-        videoSettings = [
+final class VideoRecorder {
+    enum RecorderError: LocalizedError {
+        case noFrames
+        case cannotAddInput
+        case cannotStartWriter
+        case appendFailed
+        
+        var errorDescription: String? {
+            switch self {
+            case .noFrames: return "No frames to write"
+            case .cannotAddInput: return "Cannot add video input"
+            case .cannotStartWriter: return "Cannot start video writer"
+            case .appendFailed: return "Failed to append sample buffer"
+            }
+        }
+    }
+    
+    private struct FrameTiming {
+        let frameIndex: Int
+        let videoPTSNs: UInt64
+        let videoPhoneTimestampNs: UInt64
+    }
+    
+    let trialId: String
+    let uploadBaseURL: URL
+    let videoURL: URL
+    let sidecarURL: URL
+    
+    private let fps: Int
+    private var writer: AVAssetWriter?
+    private var input: AVAssetWriterInput?
+    private var firstPTS: CMTime?
+    private let boundaryLock = NSLock()
+    private var scheduledStartPhoneNs: UInt64?
+    private var scheduledStopPhoneNs: UInt64?
+    private var timings: [FrameTiming] = []
+    private var terminalError: Error?
+    
+    init(trialId: String, fps: Int, uploadBaseURL: URL) throws {
+        self.trialId = trialId
+        self.fps = fps
+        self.uploadBaseURL = uploadBaseURL
+        
+        let root = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let directory = root
+            .appendingPathComponent("PendingVideoUploads", isDirectory: true)
+            .appendingPathComponent(trialId, isDirectory: true)
+        
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        
+        videoURL = directory.appendingPathComponent("camera_video.mp4")
+        sidecarURL = directory.appendingPathComponent("video_timestamps.csv")
+        
+        for url in [videoURL, sidecarURL] where FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+    
+    func start(atPhoneTimestampsNs timestampNs: UInt64) {
+        boundaryLock.lock()
+        scheduledStartPhoneNs = timestampNs
+        scheduledStopPhoneNs = nil
+        boundaryLock.unlock()
+    }
+    
+    func stopAcceptingFrames(atPhoneTimestampsNs timestampNs: UInt64) {
+        boundaryLock.lock()
+        scheduledStopPhoneNs = timestampNs
+        boundaryLock.unlock()
+    }
+    
+    func append(sampleBuffer: CMSampleBuffer, phoneTimestampNs: UInt64) -> Bool{
+        boundaryLock.lock()
+        let start = scheduledStartPhoneNs
+        let stop = scheduledStopPhoneNs
+        boundaryLock.unlock()
+        
+        guard terminalError == nil else {return false}
+        guard let start, phoneTimestampNs >= start else {return false}
+        if let stop, phoneTimestampNs > stop {return false}
+        
+        do {
+            if writer == nil {
+                try configureWriter(using: sampleBuffer)
+            }
+            
+            guard let writer, let input, let firstPTS else {return false}
+            guard writer.status == .writing else {
+                throw writer.error ?? RecorderError.appendFailed
+            }
+            guard input.isReadyForMoreMediaData else {return false}
+            
+            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            guard input.append(sampleBuffer) else {
+                throw writer.error ?? RecorderError.appendFailed
+            }
+            
+            let relativePTS = CMTimeSubtract(pts, firstPTS)
+            timings.append(
+                FrameTiming(
+                    frameIndex: timings.count,
+                    videoPTSNs: nanoseconds(from: relativePTS),
+                    videoPhoneTimestampNs: phoneTimestampNs
+                    )
+                )
+            return true
+        } catch {
+            terminalError = error
+            return false
+        }
+    }
+    
+    func finish(
+        preSync: PhoneClockSyncResult,
+        postSync: PhoneClockSyncResult,
+        completion: @escaping (Result<CompletedLocalVideo, Error>) -> Void
+    ) {
+        if let terminalError {
+            completion(.failure(terminalError))
+            return
+        }
+        
+        guard let writer, let input, !timings.isEmpty else {
+            completion(.failure(RecorderError.noFrames))
+            return
+        }
+        
+        input.markAsFinished()
+        writer.finishWriting { [self] in
+            do {
+                if writer.status == .failed {
+                    throw writer.error ?? RecorderError.appendFailed
+                }
+                
+                try writeSidecar(preSync: preSync, postSync: postSync)
+                let completed = CompletedLocalVideo(
+                    trialId: trialId,
+                    uploadBaseURL: uploadBaseURL,
+                    videoURL: videoURL,
+                    sidecarURL: sidecarURL
+                )
+                DispatchQueue.main.async {completion(.success(completed))}
+            } catch {
+                DispatchQueue.main.async {completion(.failure(error))}
+            }
+        }
+    }
+    
+    func cancel() {
+        boundaryLock.lock()
+        scheduledStartPhoneNs = nil
+        scheduledStopPhoneNs = nil
+        boundaryLock.unlock()
+        
+        if let writer, writer.status == .writing {
+            writer.cancelWriting()
+        }
+        
+        writer = nil
+        input = nil
+        firstPTS = nil
+        timings.removeAll()
+        
+        try? FileManager.default.removeItem(
+            at: videoURL.deletingLastPathComponent()
+        )
+    }
+    private func configureWriter(using sampleBuffer: CMSampleBuffer) throws {
+        guard let format = CMSampleBufferGetFormatDescription(sampleBuffer) else {
+            throw RecorderError.cannotAddInput
+        }
+        
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format)
+        let outputSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width,
-            AVVideoHeightKey: height,
+            AVVideoWidthKey: Int(dimensions.width),
+            AVVideoHeightKey: Int(dimensions.height),
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: Constants.Camera.h264Bitrate,
-                AVVideoMaxKeyFrameIntervalKey: fps * 2,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
+                AVVideoExpectedSourceFrameRateKey: fps,
+                AVVideoMaxKeyFrameIntervalKey: fps * 2
             ]
         ]
-
-        // Create asset writer
-        assetWriter = try AVAssetWriter(url: outputURL, fileType: .mov)
-
-        // Create video input
-        videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
-        videoInput?.expectsMediaDataInRealTime = true
-
-        // Create pixel buffer adaptor
-        let sourcePixelBufferAttributes: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: width,
-            kCVPixelBufferHeightKey as String: height
-        ]
-
-        guard let videoInput = videoInput else {
-            throw VideoRecorderError.cannotAddInput
-        }
-
-        pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
-            assetWriterInput: videoInput,
-            sourcePixelBufferAttributes: sourcePixelBufferAttributes
+        
+        let writer = try AVAssetWriter(outputURL: videoURL, fileType: .mp4)
+        let input = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: outputSettings,
+            sourceFormatHint: format
         )
-
-        // Add input to writer
-        guard let writer = assetWriter, writer.canAdd(videoInput) else {
-            throw VideoRecorderError.cannotAddInput
+        input.expectsMediaDataInRealTime = true
+        
+        guard writer.canAdd(input) else {
+            throw RecorderError.cannotAddInput
         }
-        writer.add(videoInput)
-    }
-
-    // MARK: - Recording Control
-
-    func start() throws {
-        guard let writer = assetWriter else { return }
-
+        
+        writer.add(input)
+        
         guard writer.startWriting() else {
-            if let error = writer.error {
-                throw error
-            }
-            throw VideoRecorderError.cannotStartWriting
+            throw writer.error ?? RecorderError.cannotStartWriter
         }
-
-        writer.startSession(atSourceTime: .zero)
-        isRecording = true
-        startTime = .zero
+        
+        let firstPTS = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        writer.startSession(atSourceTime: firstPTS)
+        
+        self.writer = writer
+        self.input = input
+        self.firstPTS = firstPTS
     }
-
-    func stop() throws {
-        guard isRecording else { return }
-        isRecording = false
-
-        videoInput?.markAsFinished()
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var finalError: Error?
-
-        assetWriter?.finishWriting {
-            if let error = self.assetWriter?.error {
-                finalError = error
-            }
-            semaphore.signal()
+    
+    private func writeSidecar(
+        preSync: PhoneClockSyncResult,
+        postSync: PhoneClockSyncResult
+    ) throws {
+        var csv = "frame_index;video_pts_ns;video_phone_timestamp_ns;server_timestamp_ns\n"
+        
+        for timing in timings {
+            let serverTimestamp = mapToServerTime(
+                phoneTimestampNs: timing.videoPhoneTimestampNs,
+                preSync: preSync,
+                postSync: postSync
+            )
+            csv += "\(timing.frameIndex);\(timing.videoPTSNs);"
+            csv += "\(timing.videoPhoneTimestampNs);\(serverTimestamp)\n"
         }
-
-        semaphore.wait()
-
-        if let error = finalError {
-            throw error
-        }
+        
+        try csv.write(to: sidecarURL, atomically: true, encoding: .utf8)
     }
-
-    // MARK: - Frame Writing
-
-    func write(frame: CameraFrame) throws {
-        guard isRecording, let input = videoInput, input.isReadyForMoreMediaData else {
-            return
+    
+    private func mapToServerTime(
+        phoneTimestampNs: UInt64,
+        preSync: PhoneClockSyncResult,
+        postSync: PhoneClockSyncResult
+    ) -> UInt64 {
+        let start = preSync.phoneAnchorNs
+        let end = postSync.phoneAnchorNs
+        let fraction: Double
+        
+        if phoneTimestampNs <= start || end <= start {
+            fraction = 0
+        } else if phoneTimestampNs >= end {
+            fraction = 1
+        } else {
+            fraction = Double(phoneTimestampNs - start) / Double(end - start)
         }
-
-        // Convert JPEG to pixel buffer
-        guard let uiImage = UIImage(data: frame.data),
-              let cgImage = uiImage.cgImage else {
-            return
-        }
-
-        guard let pixelBuffer = createPixelBuffer(from: cgImage) else {
-            throw VideoRecorderError.cannotCreatePixelBuffer
-        }
-
-        // Calculate presentation time
-        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(30)) // Assuming 30 FPS
-        let presentationTime = CMTimeMultiply(frameDuration, multiplier: Int32(frameCount))
-
-        // Append pixel buffer
-        guard let adaptor = pixelBufferAdaptor else {
-            throw VideoRecorderError.cannotCreatePixelBuffer
-        }
-        if !adaptor.append(pixelBuffer, withPresentationTime: presentationTime) {
-            if let error = assetWriter?.error {
-                throw error
-            }
-        }
-
-        frameCount += 1
+        
+        let offset = Double(preSync.serverMinusPhoneOffsetNs) + fraction * Double(postSync.serverMinusPhoneOffsetNs - preSync.serverMinusPhoneOffsetNs)
+        let serverTimestamp = Int64(phoneTimestampNs) + Int64(offset.rounded())
+        return UInt64(max(0, serverTimestamp))
     }
-
-    private func createPixelBuffer(from cgImage: CGImage) -> CVPixelBuffer? {
-        let width = cgImage.width
-        let height = cgImage.height
-
-        var pixelBuffer: CVPixelBuffer?
-        let attributes: [String: Any] = [
-            kCVPixelBufferCGImageCompatibilityKey as String: true,
-            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
-            kCVPixelBufferWidthKey as String: width,
-            kCVPixelBufferHeightKey as String: height
-        ]
-
-        let status = CVPixelBufferCreate(
-            kCFAllocatorDefault,
-            width,
-            height,
-            kCVPixelFormatType_32BGRA,
-            attributes as CFDictionary,
-            &pixelBuffer
+    
+    private func nanoseconds(from time: CMTime) -> UInt64 {
+        guard time.isValid else { return 0 }
+        
+        let scaled = CMTimeConvertScale(
+            time,
+            timescale: 1_000_000_000,
+            method: .default
         )
-
-        guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
-            return nil
-        }
-
-        CVPixelBufferLockBaseAddress(buffer, [])
-        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-
-        let context = CGContext(
-            data: CVPixelBufferGetBaseAddress(buffer),
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
-        )
-
-        context?.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        return buffer
+        return UInt64(max(0, scaled.value))
     }
-
-    // MARK: - Statistics
-
-    func getStatistics() -> VideoStatistics {
-        return VideoStatistics(
-            frameCount: frameCount,
-            fileSizeBytes: fileSize(),
-            isRecording: isRecording
-        )
-    }
-
-    private func fileSize() -> Int64 {
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: outputURL.path)
-            return attributes[.size] as? Int64 ?? 0
-        } catch {
-            return 0
-        }
-    }
-}
-
-// MARK: - Statistics
-
-struct VideoStatistics {
-    let frameCount: Int
-    let fileSizeBytes: Int64
-    let isRecording: Bool
-
-    var fileSizeMB: Double {
-        return Double(fileSizeBytes) / (1024.0 * 1024.0)
-    }
-
-    var duration: TimeInterval {
-        return Double(frameCount) / 30.0 // Assuming 30 FPS
-    }
-}
-
-// MARK: - Errors
-
-enum VideoRecorderError: LocalizedError {
-    case cannotAddInput
-    case cannotStartWriting
-    case cannotCreatePixelBuffer
-    case writeFailed
-
-    var errorDescription: String? {
-        switch self {
-        case .cannotAddInput:
-            return "Cannot add video input to asset writer"
-        case .cannotStartWriting:
-            return "Cannot start video writing"
-        case .cannotCreatePixelBuffer:
-            return "Cannot create pixel buffer from image"
-        case .writeFailed:
-            return "Failed to write video frame"
-        }
-    }
+    
 }

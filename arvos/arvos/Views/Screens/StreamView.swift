@@ -68,11 +68,6 @@ struct StreamView: View {
                 stopDataCollection()
             }
         }
-        .onChange(of: viewModel.currentFPS) { newValue in
-            if viewModel.isStreaming {
-                updateFPSHistory(newValue)
-            }
-        }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if !viewModel.isStreaming {
@@ -397,33 +392,35 @@ struct StreamView: View {
                             }
                             
                             // Bottom row: IMU Chart (full width)
-                BentoCard {
-                                VStack(alignment: .leading, spacing: isWideScreen ? 12 : 8) {
-                                    HStack {
-                                        Image(systemName: "gyroscope")
-                                            .font(.system(size: isWideScreen ? 18 : 14))
-                                            .foregroundColor(.secondary)
-                                        Text("IMU")
-                                            .font(.system(size: isWideScreen ? 18 : 14, weight: .medium))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Text(String(format: "%.2f", imuMagnitudeHistory.last ?? 0.0))
-                                        .font(.system(size: isWideScreen ? 32 : 20, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.primary)
-                                    
-                                    // IMU chart
-                                    if !imuMagnitudeHistory.isEmpty {
-                                        IMUChartView(data: imuMagnitudeHistory)
-                                            .frame(height: isWideScreen ? 120 : 80)
-                                    } else {
-                                        Rectangle()
-                                            .fill(Color(.systemGray5).opacity(0.3))
-                                            .frame(height: isWideScreen ? 100 : 60)
-                                            .cornerRadius(4)
+                            if viewModel.isIMUActive {
+                                BentoCard {
+                                    VStack(alignment: .leading, spacing: isWideScreen ? 12 : 8) {
+                                        HStack {
+                                            Image(systemName: "gyroscope")
+                                                .font(.system(size: isWideScreen ? 18 : 14))
+                                                .foregroundColor(.secondary)
+                                            Text("IMU")
+                                                .font(.system(size: isWideScreen ? 18 : 14, weight: .medium))
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Text(String(format: "%.2f", imuMagnitudeHistory.last ?? 0.0))
+                                            .font(.system(size: isWideScreen ? 32 : 20, weight: .bold, design: .monospaced))
+                                            .foregroundColor(.primary)
+                                        
+                                        // IMU chart
+                                        if !imuMagnitudeHistory.isEmpty {
+                                            IMUChartView(data: imuMagnitudeHistory)
+                                                .frame(height: isWideScreen ? 120 : 80)
+                                        } else {
+                                            Rectangle()
+                                                .fill(Color(.systemGray5).opacity(0.3))
+                                                .frame(height: isWideScreen ? 100 : 60)
+                                                .cornerRadius(4)
+                                        }
                                     }
                                 }
+                                .frame(maxWidth: .infinity, minHeight: isWideScreen ? 220 : 140)
                             }
-                            .frame(maxWidth: .infinity, minHeight: isWideScreen ? 220 : 140)
                         }
                     } else if isLandscape {
                         // iPhone Landscape: FPS and Mode/Rec side by side, IMU below
@@ -510,33 +507,35 @@ struct StreamView: View {
                             }
                             
                             // Row 3: IMU Chart (full width in landscape)
-                BentoCard {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Image(systemName: "gyroscope")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(.secondary)
-                                        Text("IMU")
-                                            .font(.system(size: 14, weight: .medium))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Text(String(format: "%.2f", imuMagnitudeHistory.last ?? 0.0))
-                            .font(.system(size: 20, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.primary)
-                                    
-                                    // IMU chart
-                                    if !imuMagnitudeHistory.isEmpty {
-                                        IMUChartView(data: imuMagnitudeHistory)
-                                            .frame(height: 80)
-                                    } else {
-                                        Rectangle()
-                                            .fill(Color(.systemGray5).opacity(0.3))
-                                            .frame(height: 60)
-                                            .cornerRadius(4)
-                                    }
-                                }
+                if viewModel.isIMUActive {
+                    BentoCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Image(systemName: "gyroscope")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.secondary)
+                                Text("IMU")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.secondary)
                             }
-                            .frame(maxWidth: .infinity, minHeight: 140)
+                            Text(String(format: "%.2f", imuMagnitudeHistory.last ?? 0.0))
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                .foregroundColor(.primary)
+                            
+                            // IMU chart
+                            if !imuMagnitudeHistory.isEmpty {
+                                IMUChartView(data: imuMagnitudeHistory)
+                                    .frame(height: 80)
+                            } else {
+                                Rectangle()
+                                    .fill(Color(.systemGray5).opacity(0.3))
+                                    .frame(height: 60)
+                                    .cornerRadius(4)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 140)
+                            }
                         }
                     } else if isWideScreen {
                         // iPad Portrait: Optimized layout with larger boxes
@@ -623,33 +622,36 @@ struct StreamView: View {
                             }
                             
                             // Row 3: IMU Chart (full width)
-            BentoCard {
-                                VStack(alignment: .leading, spacing: isWideScreen ? 14 : 10) {
-                                    HStack {
-                                        Image(systemName: "gyroscope")
-                                            .font(.system(size: isWideScreen ? 20 : 14))
-                                            .foregroundColor(.secondary)
-                                        Text("IMU")
-                                            .font(.system(size: isWideScreen ? 19 : 15, weight: .medium))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Text(String(format: "%.2f", imuMagnitudeHistory.last ?? 0.0))
-                                        .font(.system(size: isWideScreen ? 36 : 24, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.primary)
-                                    
-                                    // IMU chart
-                                    if !imuMagnitudeHistory.isEmpty {
-                                        IMUChartView(data: imuMagnitudeHistory)
-                                            .frame(minHeight: isWideScreen ? 140 : 100, maxHeight: isWideScreen ? 180 : 140)
-                                    } else {
-                                        Rectangle()
-                                            .fill(Color(.systemGray5).opacity(0.3))
-                                            .frame(height: isWideScreen ? 120 : 80)
-                                            .cornerRadius(4)
+                            if viewModel.isIMUActive {
+                                BentoCard {
+                                    VStack(alignment: .leading, spacing: isWideScreen ? 14 : 10) {
+                                        HStack {
+                                            Image(systemName: "gyroscope")
+                                                .font(.system(size: isWideScreen ? 20 : 14))
+                                                .foregroundColor(.secondary)
+                                            Text("IMU")
+                                                .font(.system(size: isWideScreen ? 19 : 15, weight: .medium))
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Text(String(format: "%.2f", imuMagnitudeHistory.last ?? 0.0))
+                                            .font(.system(size: isWideScreen ? 36 : 24, weight: .bold, design: .monospaced))
+                                            .foregroundColor(.primary)
+                                        
+                                        // IMU chart
+                                        if !imuMagnitudeHistory.isEmpty {
+                                            IMUChartView(data: imuMagnitudeHistory)
+                                                .frame(minHeight: isWideScreen ? 140 : 100, maxHeight: isWideScreen ? 180 : 140)
+                                        } else {
+                                            Rectangle()
+                                                .fill(Color(.systemGray5).opacity(0.3))
+                                                .frame(height: isWideScreen ? 120 : 80)
+                                                .cornerRadius(4)
+                                        }
                                     }
                                 }
+                                .frame(maxWidth: .infinity, minHeight: isWideScreen ? 260 : 180)
                             }
-                            .frame(maxWidth: .infinity, minHeight: isWideScreen ? 260 : 180)
+                            
                         }
                     } else {
                         // iPhone Portrait: Original layout
@@ -736,33 +738,36 @@ struct StreamView: View {
                             }
                             
                             // Row 3: IMU Chart (full width)
-                    BentoCard {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    HStack {
-                                        Image(systemName: "gyroscope")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(.secondary)
-                                        Text("IMU")
-                                            .font(.system(size: 15, weight: .medium))
-                                .foregroundColor(.secondary)
-                                    }
-                                    Text(String(format: "%.2f", imuMagnitudeHistory.last ?? 0.0))
-                                        .font(.system(size: 24, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.primary)
-                                    
-                                    // IMU chart
-                                    if !imuMagnitudeHistory.isEmpty {
-                                        IMUChartView(data: imuMagnitudeHistory)
-                                            .frame(minHeight: 100, maxHeight: 140)
-                                    } else {
-                                        Rectangle()
-                                            .fill(Color(.systemGray5).opacity(0.3))
-                                            .frame(height: 80)
-                                            .cornerRadius(4)
+                            if viewModel.isIMUActive {
+                                BentoCard {
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        HStack {
+                                            Image(systemName: "gyroscope")
+                                                .font(.system(size: 14))
+                                                .foregroundColor(.secondary)
+                                            Text("IMU")
+                                                .font(.system(size: 15, weight: .medium))
+                                    .foregroundColor(.secondary)
+                                        }
+                                        Text(String(format: "%.2f", imuMagnitudeHistory.last ?? 0.0))
+                                            .font(.system(size: 24, weight: .bold, design: .monospaced))
+                                            .foregroundColor(.primary)
+                                        
+                                        // IMU chart
+                                        if !imuMagnitudeHistory.isEmpty {
+                                            IMUChartView(data: imuMagnitudeHistory)
+                                                .frame(minHeight: 100, maxHeight: 140)
+                                        } else {
+                                            Rectangle()
+                                                .fill(Color(.systemGray5).opacity(0.3))
+                                                .frame(height: 80)
+                                                .cornerRadius(4)
+                                        }
                                     }
                                 }
+                                .frame(maxWidth: .infinity, minHeight: 180)
                             }
-                            .frame(maxWidth: .infinity, minHeight: 180)
+                            
                         }
                     }
                     
@@ -778,32 +783,38 @@ struct StreamView: View {
     // MARK: - Data Collection
 
     private func startDataCollection() {
-        // Stop existing timers
+        
         stopDataCollection()
         
-        // Update FPS history less frequently for better performance (1 second instead of 0.5)
-        fpsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
-            if self.viewModel.isStreaming {
-                self.updateFPSHistory(self.viewModel.currentFPS)
-            }
-        }
-        if let timer = fpsTimer {
-            RunLoop.main.add(timer, forMode: .common)
+        fpsTimer = Timer.scheduledTimer(
+            withTimeInterval: 1.0,
+            repeats: true
+        ) { _ in
+            guard viewModel.isStreaming else { return }
+            updateFPSHistory(viewModel.currentFPS)
         }
         
-        // Update IMU history less frequently for better performance (0.5 seconds instead of 0.1)
-        imuTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-            if self.viewModel.isStreaming {
-                // Calculate IMU magnitude from latest IMU data
-                // For now, use a simple calculation - you can enhance this
-                let mockMagnitude = Double.random(in: 0.8...1.2) // Placeholder
-                self.updateIMUHistory(mockMagnitude)
-            }
+        if let fpsTimer {
+            RunLoop.main.add(fpsTimer, forMode: .common)
         }
-        if let timer = imuTimer {
-            RunLoop.main.add(timer, forMode: .common)
+        
+        imuTimer = Timer.scheduledTimer(
+            withTimeInterval: 0.1,
+            repeats: true
+        ) { _ in
+            guard viewModel.isStreaming, viewModel.isIMUActive else {
+                imuMagnitudeHistory.removeAll()
+                return
+            }
+            
+            updateIMUHistory(viewModel.currentIMUMagnitude)
+        }
+        
+        if let imuTimer {
+            RunLoop.main.add(imuTimer, forMode: .common)
         }
     }
+        
     
     private func stopDataCollection() {
         fpsTimer?.invalidate()

@@ -33,6 +33,16 @@ struct JSONMessage: NetworkMessage, Codable {
     }
 }
 
+struct VideoRecordingArmedMessage: Encodable {
+    let type = "video_recording_armed"
+    let trialId: String
+}
+
+struct VideoUploadFinishedMessage: Encodable {
+    let type = "video_upload_finished"
+    let trialId: String
+}
+
 /// Binary message header for large data (images, point clouds)
 struct BinaryMessageHeader: Codable {
     let type: String

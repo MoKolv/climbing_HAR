@@ -24,6 +24,16 @@ class StreamingViewModel: ObservableObject {
     @Published var isConnected = false
     @Published var connectionHost = ""
     @Published var connectionPort = "9090"
+    @Published var currentIMUMagnitude: Double = 0
+    
+    var isIMUActive: Bool {
+        sensorStatuses.imu == .active
+    }
+    
+    var activeConfiguration: ModeConfiguration {
+        sensorManager.currentConfig
+    }
+    
     @Published var selectedProtocol: NetworkManager.ProtocolType = .websocket {
         didSet {
             guard oldValue != selectedProtocol else { return }
@@ -74,6 +84,9 @@ class StreamingViewModel: ObservableObject {
         networkManager.$connectionState
             .map { $0 == .connected }
             .assign(to: &$isConnected)
+        
+        sensorManager.$currentIMUMagnitude
+            .assign(to: &$currentIMUMagnitude)
     }
 
     private func startUpdateTimer() {

@@ -203,28 +203,28 @@ struct SettingsView: View {
                         HStack {
                             Text("Camera Enabled")
                             Spacer()
-                            Text(viewModel.selectedMode.config.cameraEnabled ? "Yes" : "No")
+                            Text(viewModel.activeConfiguration.cameraEnabled ? "Yes" : "No")
                                 .foregroundColor(.secondary)
                         }
 
                         HStack {
                             Text("Depth Enabled")
                             Spacer()
-                            Text(viewModel.selectedMode.config.depthEnabled ? "Yes" : "No")
+                            Text(viewModel.activeConfiguration.depthEnabled ? "Yes" : "No")
                                 .foregroundColor(.secondary)
                         }
 
                         HStack {
                             Text("IMU Enabled")
                             Spacer()
-                            Text(viewModel.selectedMode.config.imuEnabled ? "Yes" : "No")
+                            Text(viewModel.activeConfiguration.imuEnabled ? "Yes" : "No")
                                 .foregroundColor(.secondary)
                         }
 
                         HStack {
                             Text("Recording Enabled")
                             Spacer()
-                            Text(viewModel.selectedMode.config.recordingEnabled ? "Yes" : "No")
+                            Text(viewModel.activeConfiguration.recordingEnabled ? "Yes" : "No")
                                 .foregroundColor(.secondary)
                         }
                     }

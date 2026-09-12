@@ -25,7 +25,7 @@ class TrialOutput:
             "imu": (trial_directory / "imu.csv").open("w", newline=""),
             "watch_imu": (trial_directory / "watch_imu.csv").open("w", newline=""),
             "watch_attitude": (trial_directory / "watch_attitude.csv").open("w", newline=""),
-            "video_metadata": (trial_directory / "video_metadata.csv").open("w", newline=""),
+            "phone_sync": (trial_directory / "phone_sync.csv").open("w", newline=""),
             "watch_sync": (trial_directory / "watch_sync.csv").open("w", newline=""),
             "stream_validation": (trial_directory / "stream_validation.csv").open("w", newline=""),
         }
@@ -43,7 +43,7 @@ class TrialOutput:
 
         self._flush_rows: dict[str, int] = {
             name: 0
-            for name in ("imu", "watch_imu", "watch_attitude", "video_metadata")
+            for name in ("imu", "watch_imu", "watch_attitude")
         }
 
         self._last_flush: dict[str, float] = {
@@ -79,8 +79,11 @@ class TrialOutput:
             "roll", "pitch", "yaw", "reference_frame",
         ])
 
-        self._writers["video_metadata"].writerow([
-            "timestamp_ns", "timestamp_s", "frame_count",
+        self._writers["phone_sync"].writerow([
+            "trial_id", "role", "phase", "server_minus_phone_offset_ns",
+            "phone_anchor_ns", "server_anchor_ns", "min_rtt_ns",
+            "median_selected_rtt_ns", "offset_spread_ns",
+            "valid_sample_count", "selected_sample_count",
         ])
 
         self._writers["watch_sync"].writerow([
@@ -123,12 +126,6 @@ class TrialOutput:
         _, _, writer = self._spools[stream_name]
         writer.writerow([self.trial_number, *row])
 
-    def record_video_metadata(self, timestamp_ns: int, timestamp_s: float, frame_count: int) -> None:
-        self._writers["video_metadata"].writerow([
-            timestamp_ns, timestamp_s, frame_count,
-        ])
-        self._flush("video_metadata")
-
     def record_sync_result(self, data: dict[str, Any]) -> None:
         phase = data["phase"]
         self._writers["watch_sync"].writerow([
@@ -158,6 +155,22 @@ class TrialOutput:
             "selected_sample_count": data["selectedSampleCount"],
             "boundary_phone_ns": data["boundaryPhoneNs"],
         }
+
+    def record_phone_sync_result(self, role: str, data: dict[str, Any]) -> None:
+        self._writers["phone_sync"].writerow([
+            self.trial_number,
+            role,
+            data["phase"],
+            data["serverMinusPhoneOffsetNs"],
+            data["phoneAnchorNs"],
+            data["serverAnchorNs"],
+            data["minRTTNs"],
+            data["medianSelectedRTTNs"],
+            data["offsetSpreadNs"],
+            data["validSampleCount"],
+            data["selectedSampleCount"],
+        ])
+        self._files["phone_sync"].flush()
 
     def finalize(self, post_boundary_ns: int) -> dict[str, Any]:
         if self._pre_boundary_ns is None:

@@ -83,6 +83,10 @@ class NetworkManager: ObservableObject {
     // Legacy WebSocket client service (for cloud relay fallback)
     private let webSocketService = WebSocketService()
     private var cancellables = Set<AnyCancellable>()
+    
+    // multiple client sync
+    private let phoneClockSynchronizer = PhoneClockSynchronizer()
+    private let trialFileUploader = TrialFileUploader()
 
     private init() {
         webSocketService.delegate = self
@@ -523,6 +527,16 @@ class NetworkManager: ObservableObject {
         }
     }
     
+    private func sendJSON<T: Encodable>(_ value: T) throws {
+        if isServerMode{
+            try webSocketServer.broadcast(json: value)
+        } else if let adapter {
+            try adapter.send(json: value)
+        } else {
+            try webSocketService.send(json: value)
+        }
+    }
+    
     private func sendWatchSyncResult(_ result: WatchTimeSyncResult, boundaryPhoneNs: UInt64) {
         
         print("""
@@ -575,6 +589,7 @@ class NetworkManager: ObservableObject {
     
     private func handleIncomingServerMessage(_ message: String) {
         print ("RAW SERVER MESSAGE:", message)
+        let clientReceiveNs = Constants.Time.now()
         
         guard let data = message.data(using: .utf8) else {
             print("Could not convert server message to Data")
@@ -596,6 +611,13 @@ class NetworkManager: ObservableObject {
         }
         
         switch messageType {
+        case "phone_clock_sync_response":
+            DispatchQueue.main.async {
+                self.phoneClockSynchronizer.handleResponse(
+                    json,
+                    clientReceiveNs: clientReceiveNs
+                )
+            }
         
         case "command":
             handleCommand(json)
@@ -607,6 +629,46 @@ class NetworkManager: ObservableObject {
         }
         
     }
+    
+    private func uint64Parameter(_ key: String, in json: [String: Any]) -> UInt64? {
+        if let value = json[key] as? NSNumber { return value.uint64Value }
+        if let value = json[key] as? String { return UInt64(value) }
+        return nil
+    }
+    
+    private func integerParameter(
+        _ key: String,
+        in json: [String: Any],
+        default defaultValue: Int
+    ) -> Int {
+        if let value = json[key] as? NSNumber { return value.intValue }
+        if let value = json[key] as? String, let parsed = Int(value) {
+            return parsed
+        }
+        return defaultValue
+    }
+    
+    private func schedule(
+        serverTimestampNs: UInt64,
+        syncPhase: String,
+        action: @escaping () -> Void
+    ) {
+        guard let localTarget = phoneClockSynchronizer.phoneTime(
+            forServerTime: serverTimestampNs,
+            phase: syncPhase,
+        ) else {
+            sendError("clock_not_synchronized", details: "No \(syncPhase) phone-clock result")
+            return
+        }
+        
+        let now = Constants.Time.now()
+        let delayNs = localTarget > now ? localTarget - now: 0
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Double(delayNs) / 1_000_000_000,
+            execute: action
+        )
+    }
+
 
     // MARK: - Statistics
 
@@ -664,25 +726,6 @@ extension NetworkManager: WebSocketServiceDelegate {
             SensorManager.shared.stopStreaming()
         }
     }
-    
-    private func integertParameter(_ key: String, in json: [String: Any], default defaultValue: Int) -> Int {
-        if let value = json[key] as? Int {
-            return value
-        }
-        
-        if let value = json[key] as? NSNumber {
-            return value.intValue
-        }
-        
-        if
-            let value = json[key] as? String,
-            let parsedValue = Int(value)
-        {
-            return parsedValue
-        }
-        
-        return defaultValue
-    }
 
     private func handleCommand(_ json: [String: Any]) {
         // Handle server commands (e.g., change mode, start/stop recording)
@@ -722,10 +765,10 @@ extension NetworkManager: WebSocketServiceDelegate {
                 
                 self.sendWatchSyncResult(result, boundaryPhoneNs: Constants.Time.now())
             }
-        
+            
         case "post_trial_sync":
             print("Post trial sync request")
-                    
+            
             WatchSensorManager.shared.synchronizeForTrial(phase: "post") { [weak self] result in
                 
                 guard let self,
@@ -744,21 +787,116 @@ extension NetworkManager: WebSocketServiceDelegate {
                 SensorManager.shared.startStreaming()
             }
         case "start_imu_watch_streaming":
+            guard let startAt = uint64Parameter("startAtServerNs", in: json) else { return }
             var configuration = StreamMode.experimentIMUWatch.config
-            configuration.imuHz = integertParameter("imuHz", in: json, default: configuration.imuHz)
-            configuration.watchHz = integertParameter("watchHz", in: json, default: configuration.watchHz)
-            startExperimentStreaming(configuration)
+            configuration.imuHz = integerParameter("imuHz", in: json, default: configuration.imuHz)
+            configuration.watchHz = integerParameter("watchHz", in: json, default: configuration.watchHz)
             
-        case "start_video_streaming":
-            var configuartion = StreamMode.experimentVideo.config
-            configuartion.cameraFPS = integertParameter("videoFPS", in: json, default: configuartion.cameraFPS)
-            startExperimentStreaming(StreamMode.experimentVideo.config)
-        case "stop_imu_watch_streaming",
-             "stop_video_streaming",
+            schedule(serverTimestampNs: startAt, syncPhase: "pre") {
+                self.startExperimentStreaming(configuration)
+            }
+            
+        case "stop_imu_watch_streaming":
+            guard let stopAt = uint64Parameter("stopAtServerNs", in: json) else { return }
+            schedule(serverTimestampNs: stopAt, syncPhase: "post") {
+                self.stopExperimentStreaming()
+            }
+      
+        case "stop_video_streaming",
              "stop_streaming":
             stopExperimentStreaming()
             
-
+        case "synchronize_phone_clock":
+            guard let phase = json["phase"] as? String else { return }
+            
+            phoneClockSynchronizer.synchronize(
+                phase: phase,
+                send: { [weak self] ping in
+                    guard let self else { return }
+                    try sendJSON(ping)
+                },
+                completion: { [weak self] result in
+                    guard let self else { return }
+                    switch result {
+                    case .success(let sync):
+                        do {
+                            try sendJSON(PhoneClockSyncResultMessage(result: sync))
+                        } catch {
+                            sendError("clock_sync_result_send_failed", details: error.localizedDescription)
+                        }
+                    case .failure(let error):
+                        sendError("phone_clock_sync_failed", details: error.localizedDescription)
+                    }
+                }
+            )
+            
+        case "arm_video_recording":
+            guard
+                let trialId = json["trialId"] as? String,
+                let uploadString = json["uploadBaseURL"] as? String,
+                let uploadURL = URL(string: uploadString)
+            else {
+                sendError("invalid_video_arm_command", details: nil)
+                return
+            }
+            
+            let fps = integerParameter("videoFps", in: json, default: 30)
+            do {
+                try SensorManager.shared.armLocalVideoTrial(
+                    trialId: trialId,
+                    fps: fps,
+                    uploadBaseURL: uploadURL
+                )
+                try sendJSON(VideoRecordingArmedMessage(trialId: trialId))
+            } catch {
+                sendError("video_arm_failed", details: error.localizedDescription)
+            }
+            
+        case "start_video_recording":
+            guard let startAt = uint64Parameter("startAtServerNs", in: json) else { return }
+            
+            schedule(serverTimestampNs: startAt, syncPhase: "pre") {
+                guard let localStart = self.phoneClockSynchronizer.phoneTime(forServerTime: startAt, phase: "pre") else { return }
+                SensorManager.shared.beginLocalVideoRecording(atPhoneTimestampNs: localStart)
+            }
+            
+        case "cancel_video_recording":
+            DispatchQueue.main.async {
+                SensorManager.shared.cancelLocalVideoTrial()
+            }
+            
+        case "stop_video_recording":
+            guard let stopAt = uint64Parameter("stopAtServerNs", in: json) else { return }
+            
+            schedule(serverTimestampNs: stopAt, syncPhase: "post") {
+                guard
+                    let pre = self.phoneClockSynchronizer.result(for: "pre"),
+                    let post = self.phoneClockSynchronizer.result(for: "post"),
+                    let localStop = self.phoneClockSynchronizer.phoneTime(forServerTime: stopAt, phase: "post")
+                else { return }
+                
+                SensorManager.shared.finishLocalVideoRecording(
+                    stopAtPhoneTimestampNs: localStop,
+                    preSync: pre,
+                    postSync: post
+                ) { result in
+                    switch result {
+                    case .success(let completedVideo):
+                        self.trialFileUploader.upload(completedVideo: completedVideo) {
+                            uploadResult in
+                            switch uploadResult {
+                            case .success(let success):
+                                try? self.sendJSON(VideoUploadFinishedMessage(trialId: completedVideo.trialId))
+                            case .failure(let error):
+                                self.sendError("video_upload_failed", details: error.localizedDescription)
+                            }
+                        }
+                    case .failure(let error):
+                        self.sendError("video_finish_failed", details: error.localizedDescription)
+                    }
+                }
+            }
+            
         case "change_mode":
             if let modeString = json["mode"] as? String,
                let mode = StreamMode.allCases.first(where: { $0.rawValue == modeString }) {

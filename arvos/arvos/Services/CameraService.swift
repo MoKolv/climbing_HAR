@@ -12,7 +12,13 @@ import Combine
 
 protocol CameraServiceDelegate: AnyObject {
     func cameraService(_ service: CameraService, didCapture frame: CameraFrame)
+    func cameraService(_ service: CameraService, didCaptureVideoSample sampleBuffer: CMSampleBuffer, phoneTimestampNs: UInt64)
     func cameraService(_ service: CameraService, didEncounterError error: Error)
+}
+
+enum CameraCaptureMode {
+    case jpegNetwork
+    case localVideo
 }
 
 class CameraService: NSObject {
@@ -22,6 +28,7 @@ class CameraService: NSObject {
     private var videoOutput: AVCaptureVideoDataOutput?
     private var photoOutput: AVCapturePhotoOutput?
     private let sessionQueue = DispatchQueue(label: "com.arvos.camera")
+    private var captureMode: CameraCaptureMode = .jpegNetwork
 
     private var isRunning = false
     private var targetFPS: Int = 30
@@ -42,10 +49,13 @@ class CameraService: NSObject {
 
     // MARK: - Configuration
 
-    func configure(fps: Int) throws {
+    func configure(fps: Int, captureMode: CameraCaptureMode = .jpegNetwork) throws {
+        precondition(fps>0)
         targetFPS = fps
         frameInterval = Constants.Time.nanosPerSecond / UInt64(fps)
-
+        lastFrameTime = 0
+        self.captureMode = captureMode
+        
         var configurationError: Error?
 
         sessionQueue.sync {
@@ -56,8 +66,8 @@ class CameraService: NSObject {
             }
         }
 
-        if let error = configurationError {
-            throw error
+        if let configurationError {
+            throw configurationError
         }
     }
 
@@ -145,13 +155,25 @@ class CameraService: NSObject {
             self?.isRunning = true
         }
     }
-
-    func stop() {
-        guard let session = captureSession, isRunning else { return }
-
+    
+    func stop(completion: (() -> Void)? = nil) {
+        guard let session = captureSession else {
+            DispatchQueue.main.async {
+                completion?()
+            }
+            return
+        }
+        
         sessionQueue.async { [weak self] in
-            session.stopRunning()
+            if session.isRunning {
+                session.stopRunning()
+            }
+            
             self?.isRunning = false
+            
+            DispatchQueue.main.async {
+                completion?()
+            }
         }
     }
 
@@ -185,59 +207,112 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
     private static var cameraFrameCount = 0
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        let timestamp = Constants.Time.now()
-
-        // Frame rate limiting
-        let timeSinceLastFrame = timestamp - lastFrameTime
-        if lastFrameTime > 0 && timeSinceLastFrame < frameInterval {
+        
+        let capturePTS = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        
+        guard
+            capturePTS.isValid,
+            let sessionClock = captureSession?.synchronizationClock
+        else {
             return
         }
-        lastFrameTime = timestamp
-
-        Self.frameCountLock.lock()
-        Self.cameraFrameCount += 1
-        let currentCount = Self.cameraFrameCount
-        Self.frameCountLock.unlock()
-
-        if currentCount <= 3 || currentCount % 10 == 0 {
-        }
-
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-
-        // Get intrinsics if available
-        var intrinsics: CameraIntrinsics?
-        if let camData = CMGetAttachment(sampleBuffer, key: kCMSampleBufferAttachmentKey_CameraIntrinsicMatrix, attachmentModeOut: nil) as? Data {
-            camData.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) in
-                if let baseAddress = ptr.baseAddress, ptr.count >= MemoryLayout<simd_float3x3>.size {
-                    let matrix = baseAddress.assumingMemoryBound(to: simd_float3x3.self).pointee
-                    intrinsics = CameraIntrinsics(intrinsics: matrix)
-                }
-            }
-        }
-
-        // Convert to JPEG using cached context with correct orientation
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return }
-        // Fix rotation: iPhone camera is rotated 90 degrees, use .right orientation
-        let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
-        guard let jpegData = uiImage.jpegData(compressionQuality: Constants.Camera.jpegQuality) else { return }
-
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-
-        let frame = CameraFrame(
-            timestamp: timestamp,
-            data: jpegData,
-            width: width,
-            height: height,
-            intrinsics: intrinsics
+        
+        let hostPTS = CMSyncConvertTime(
+            capturePTS,
+            from: sessionClock,
+            to: CMClockGetHostTimeClock()
         )
         
-        if currentCount % 30 == 0 {
-            print("Sent camera frame #\(currentCount), jpg size: \(jpegData.count) bytes")
+        let hostTicks = CMClockConvertHostTimeToSystemUnits(hostPTS)
+        let phoneTimestampNs = Constants.Time.nanoseconds(fromAbsoluteTime: hostTicks)
+        
+        
+        
+        switch captureMode {
+        case .localVideo:
+            // no jpeg compression, uiimage creation or network transmission on this path
+            
+            delegate?.cameraService(
+                self,
+                didCaptureVideoSample: sampleBuffer,
+                phoneTimestampNs: phoneTimestampNs
+            )
+            return
+            
+        case .jpegNetwork:
+            if lastFrameTime > 0 {
+                guard phoneTimestampNs > lastFrameTime else {
+                    return
+                }
+                
+                let elapsedNs = phoneTimestampNs - lastFrameTime
+                if elapsedNs < frameInterval {
+                    return
+                }
+            }
+            
+            lastFrameTime = phoneTimestampNs
         }
+        
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+             return
+         }
 
-        delegate?.cameraService(self, didCapture: frame)
+         var intrinsics: CameraIntrinsics?
+
+         if let intrinsicsData = CMGetAttachment(
+             sampleBuffer,
+             key: kCMSampleBufferAttachmentKey_CameraIntrinsicMatrix,
+             attachmentModeOut: nil
+         ) as? Data {
+             intrinsicsData.withUnsafeBytes {
+                 (pointer: UnsafeRawBufferPointer) in
+
+                 guard
+                     let baseAddress = pointer.baseAddress,
+                     pointer.count >= MemoryLayout<simd_float3x3>.size
+                 else {
+                     return
+                 }
+
+                 let matrix = baseAddress
+                     .assumingMemoryBound(to: simd_float3x3.self)
+                     .pointee
+
+                 intrinsics = CameraIntrinsics(intrinsics: matrix)
+             }
+         }
+
+         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+
+         guard let cgImage = ciContext.createCGImage(
+             ciImage,
+             from: ciImage.extent
+         ) else {
+             return
+         }
+
+         let uiImage = UIImage(
+             cgImage: cgImage,
+             scale: 1.0,
+             orientation: .right
+         )
+
+         guard let jpegData = uiImage.jpegData(
+             compressionQuality: Constants.Camera.jpegQuality
+         ) else {
+             return
+         }
+
+         let frame = CameraFrame(
+             timestamp: phoneTimestampNs,
+             data: jpegData,
+             width: CVPixelBufferGetWidth(pixelBuffer),
+             height: CVPixelBufferGetHeight(pixelBuffer),
+             intrinsics: intrinsics
+         )
+
+         delegate?.cameraService(self, didCapture: frame)
     }
 
     func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {

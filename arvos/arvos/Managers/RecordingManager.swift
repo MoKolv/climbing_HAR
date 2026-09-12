@@ -15,7 +15,6 @@ class RecordingManager: ObservableObject {
     @Published private(set) var fileSize: Int64 = 0
 
     private var mcapWriter: MCAPWriter?
-    private var videoRecorder: VideoRecorder?
     private var pointCloudFiles: [URL] = []
     private var currentRecordingMode: StreamMode?
 
@@ -92,18 +91,6 @@ class RecordingManager: ObservableObject {
         cameraChannelId = mcapWriter?.addChannel(topic: "/camera", messageEncoding: "image/jpeg")
         depthChannelId = mcapWriter?.addChannel(topic: "/depth", messageEncoding: "application/octet-stream")
 
-        // Initialize video recorder if camera enabled
-        if mode.config.cameraEnabled {
-            let videoPath = sessionDir.appendingPathComponent("camera.mov")
-            videoRecorder = try VideoRecorder(
-                outputURL: videoPath,
-                width: 1920,
-                height: 1080,
-                fps: mode.config.cameraFPS
-            )
-            try videoRecorder?.start()
-        }
-
         isRecording = true
 
         // Start duration timer
@@ -125,9 +112,6 @@ class RecordingManager: ObservableObject {
         try mcapWriter?.finalize()
         mcapWriter = nil
 
-        // Stop video
-        try videoRecorder?.stop()
-        videoRecorder = nil
 
         // Save metadata
         try saveMetadata()
@@ -176,25 +160,29 @@ class RecordingManager: ObservableObject {
     }
 
     func record(cameraFrame: CameraFrame) {
-        guard isRecording else { return }
+        guard
+             isRecording,
+             let channelId = cameraChannelId,
+             let writer = mcapWriter
+         else {
+             return
+         }
 
-        // Record to MCAP
-        if let channelId = cameraChannelId, let writer = mcapWriter {
-            do {
-                try writer.writeMessage(channelId: channelId, timestamp: cameraFrame.timestamp, data: cameraFrame.data)
-            } catch {
-            }
-        }
+         do {
+             try writer.writeMessage(
+                 channelId: channelId,
+                 timestamp: cameraFrame.timestamp,
+                 data: cameraFrame.data
+             )
 
-        // Record to video
-        if let recorder = videoRecorder {
-            do {
-                try recorder.write(frame: cameraFrame)
-                sensorCounts.cameraFrames += 1
-            } catch {
-            }
-        }
-    }
+             sensorCounts.cameraFrames += 1
+         } catch {
+             print(
+                 "Failed to record camera frame to MCAP:",
+                 error.localizedDescription
+             )
+         }
+     }
 
     func record(depthFrame: DepthFrame) {
         guard isRecording, let sessionId = sessionId else { return }
@@ -238,7 +226,7 @@ class RecordingManager: ObservableObject {
             startTime: startTime,
             endTime: Date(),
             duration: recordingDuration,
-            fileFormats: ["mcap", "mov", "ply"],
+            fileFormats: ["mcap", "ply"],
             fileSize: fileSize,
             sensorCounts: SessionMetadata.SensorCounts(
                 cameraFrames: sensorCounts.cameraFrames,

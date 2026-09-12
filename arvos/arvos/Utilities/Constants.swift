@@ -49,19 +49,22 @@ enum Constants {
     // MARK: - Timestamps
     enum Time {
         static let nanosPerSecond: UInt64 = 1_000_000_000
+        
+        static func nanoseconds(fromAbsoluteTime value: UInt64) -> UInt64 {
+            var timebase = mach_timebase_info_data_t()
+            mach_timebase_info(&timebase)
+            
+            return value * UInt64(timebase.numer) / UInt64(timebase.denom)
+        }
 
         /// Get current timestamp in nanoseconds since boot
         static func now() -> UInt64 {
-            var time = mach_timebase_info()
-            mach_timebase_info(&time)
-            let nanos = mach_absolute_time() * UInt64(time.numer) / UInt64(time.denom)
-            return nanos
+            nanoseconds(fromAbsoluteTime: mach_absolute_time())
         }
 
         /// Get current system time in nanoseconds since Unix epoch
         static func systemTime() -> UInt64 {
-            let now = Date().timeIntervalSince1970
-            return UInt64(now * Double(nanosPerSecond))
+            UInt64(Date().timeIntervalSince1970 * Double(nanosPerSecond))
         }
     }
 }
