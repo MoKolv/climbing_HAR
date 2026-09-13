@@ -9,7 +9,7 @@ from typing import Optional, Callable, Any
 from ..client import ArvosClient
 from ..data_types import (
     IMUData, GPSData, PoseData, CameraFrame, DepthFrame,
-    HandshakeMessage, WatchIMUData, WatchAttitudeData, WatchMotionActivityData
+    HandshakeMessage,  WatchMotionActivityData
 )
 
 
@@ -47,8 +47,6 @@ class BaseArvosServer(ABC):
         self.on_error: Optional[Callable[[str, Optional[str], Optional[str]], None]] = None
         
         # Apple Watch callbacks
-        self.on_watch_imu: Optional[Callable[[WatchIMUData], None]] = None
-        self.on_watch_attitude: Optional[Callable[[WatchAttitudeData], None]] = None
         self.on_watch_activity: Optional[Callable[[WatchMotionActivityData], None]] = None
         
         # Use ArvosClient for message parsing
@@ -66,8 +64,6 @@ class BaseArvosServer(ABC):
         self._parser.on_depth = self.on_depth
         self._parser.on_status = self.on_status
         self._parser.on_error = self.on_error
-        self._parser.on_watch_imu = self.on_watch_imu
-        self._parser.on_watch_attitude = self.on_watch_attitude
         self._parser.on_watch_activity = self.on_watch_activity
     
     async def _invoke_callback(self, callback: Optional[Callable], *args, **kwargs):

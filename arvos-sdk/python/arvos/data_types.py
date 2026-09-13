@@ -6,37 +6,62 @@ from dataclasses import dataclass
 from typing import Optional, List, Tuple
 import numpy as np
 
+@dataclass
+class AttitudeData:
+    """Orientation associated with one CoreMotion sample."""
+
+    quaternion: Tuple[float, float, float, float] # x,y,z,w
+    roll: float
+    pitch: float
+    yaw: float
+    reference_frame: str
+
+    @property
+    def quaternion_array(self) -> np.ndarray:
+        return np.array(self.quaternion)
+
+    def __iter__(self):
+        yield self.roll
+        yield self.pitch
+        yield self.yaw
 
 @dataclass
 class IMUData:
-    """IMU (accelerometer + gyroscope) data"""
+    """Phone or Watch CoreMotion sample in the relay-phone clock domain"""
+
     timestamp_ns: int
-    sequence_id: int
-    angular_velocity: Tuple[float, float, float]  # rad/s (x, y, z)
-    linear_acceleration: Tuple[float, float, float]  # m/s² (x, y, z)
-    magnetic_field: Optional[Tuple[float, float, float]] = None  # μT (x, y, z)
-    attitude: Optional[Tuple[float, float, float]] = None  # roll, pitch, yaw (rad)
-    gravity: Optional[Tuple[float, float, float]] = None  # m/s² (x, y, z) - gravity vector
+    angular_velocity: Tuple[float, float, float]
+    linear_acceleration: Tuple[float, float, float]
+    sequence_id: int = 0
+    source: str = "phone"
+    source_timestamp_ns: Optional[int] = None
+    phone_received_timestamp_ns: Optional[int] = None
+    gravity: Optional[Tuple[float, float, float]] = None
+    magnetic_field: Optional[Tuple[float, float, float]] = None
+    attitude: Optional[AttitudeData] = None
+
+    def __post_init__(self) -> None:
+        if self.source_timestamp_ns is None:
+            self.source_timestamp_ns = self.timestamp_ns
+
+        if self.source not in {"phone", "watch"}:
+            raise ValueError(f"Unknown IMU source: {self.source}")
 
     @property
     def timestamp_s(self) -> float:
-        """Timestamp in seconds"""
         return self.timestamp_ns / 1e9
 
     @property
     def angular_velocity_array(self) -> np.ndarray:
-        """Angular velocity as numpy array"""
         return np.array(self.angular_velocity)
 
     @property
     def linear_acceleration_array(self) -> np.ndarray:
-        """Linear acceleration as numpy array"""
         return np.array(self.linear_acceleration)
 
     @property
     def gravity_array(self) -> Optional[np.ndarray]:
-        """Gravity vector as numpy array"""
-        return np.array(self.gravity) if self.gravity else None
+        return np.array(self.gravity) if self.gravity is not None else None
 
 
 @dataclass
@@ -298,64 +323,6 @@ class HandshakeMessage:
     def timestamp_s(self) -> float:
         """Timestamp in seconds"""
         return self.timestamp_ns / 1e9
-
-
-@dataclass
-class WatchIMUData:
-    """Apple Watch IMU data (accelerometer + gyroscope + gravity)"""
-    timestamp_ns: int
-    sequence_id: int
-    watch_timestamp_ns: int
-    phone_received_timestamp_ns: int
-    angular_velocity: Tuple[float, float, float]  # rad/s (x, y, z)
-    linear_acceleration: Tuple[float, float, float]  # m/s² (x, y, z)
-    gravity: Tuple[float, float, float]  # m/s² (x, y, z)
-
-    @property
-    def timestamp_s(self) -> float:
-        """Timestamp in seconds"""
-        return self.timestamp_ns / 1e9
-
-    @property
-    def angular_velocity_array(self) -> np.ndarray:
-        """Angular velocity as numpy array"""
-        return np.array(self.angular_velocity)
-
-    @property
-    def linear_acceleration_array(self) -> np.ndarray:
-        """Linear acceleration as numpy array"""
-        return np.array(self.linear_acceleration)
-
-    @property
-    def gravity_array(self) -> np.ndarray:
-        """Gravity vector as numpy array"""
-        return np.array(self.gravity)
-
-
-@dataclass
-class WatchAttitudeData:
-    """Apple Watch attitude (orientation) data"""
-    timestamp_ns: int
-    sequence_id: int
-    watch_timestamp_ns: int
-    phone_received_timestamp_ns: int
-    quaternion: Tuple[float, float, float, float]  # x, y, z, w
-    pitch: float  # radians
-    roll: float  # radians
-    yaw: float  # radians
-    reference_frame: str
-    sensor_type: str
-
-    @property
-    def timestamp_s(self) -> float:
-        """Timestamp in seconds"""
-        return self.timestamp_ns / 1e9
-
-    @property
-    def quaternion_array(self) -> np.ndarray:
-        """Quaternion as numpy array"""
-        return np.array(self.quaternion)
-
 
 @dataclass
 class WatchMotionActivityData:

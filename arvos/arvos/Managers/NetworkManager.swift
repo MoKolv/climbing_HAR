@@ -332,50 +332,6 @@ class NetworkManager: ObservableObject {
             #endif
         }
     }
-    
-    // steram watch_imu data
-    
-    func stream(watchIMUNetworkData data: WatchIMUNetworkData) {
-        do {
-            if isServerMode {
-                try webSocketServer.broadcast(json: data)
-            }
-            else if let adapter = adapter {
-                try adapter.send(json: data)
-            }
-            else {
-                try webSocketService.send(json: data)
-            }
-            
-            
-        } catch {
-            #if DEBUG
-            print("Failed to stream Watch IMU data: \(error)")
-            #endif
-        }
-    }
-    
-    // stream watch_attitude data
-    func stream(watchAttitudeNetworkData data: WatchAttitudeNetworkData){
-        do {
-            if isServerMode {
-                try webSocketServer.broadcast(json: data)
-            }
-            else if let adapter = adapter {
-                try adapter.send(json: data)
-            }
-            else {
-                try webSocketService.send(json: data)
-            }
-            
-    
-        } catch {
-            #if DEBUG
-            print("Failed to stream watch sensor packet: \(error)")
-            #endif
-        }
-    }
-    
 
     /// Stream GPS data
     func stream(gpsData: GPSData) {

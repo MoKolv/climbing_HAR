@@ -7,11 +7,12 @@ import websockets
 import json
 import struct
 import base64
+import inspect
 from typing import Callable, Optional, Dict, Any
 from .data_types import (
     IMUData, GPSData, PoseData, CameraFrame, DepthFrame,
     HandshakeMessage, DeviceCapabilities, CameraIntrinsics,
-    WatchIMUData, WatchAttitudeData, WatchMotionActivityData
+    WatchMotionActivityData, AttitudeData
 )
 
 
@@ -46,8 +47,6 @@ class ArvosClient:
         self.on_disconnect: Optional[Callable[[], None]] = None
 
         # Apple Watch callbacks
-        self.on_watch_imu: Optional[Callable[[WatchIMUData], None]] = None
-        self.on_watch_attitude: Optional[Callable[[WatchAttitudeData], None]] = None
         self.on_watch_activity: Optional[Callable[[WatchMotionActivityData], None]] = None
 
         # Binary message buffer for handling fragmented messages
@@ -119,20 +118,9 @@ class ArvosClient:
             if msg_type == "handshake":
                 await self._handle_handshake(data)
             elif msg_type == "imu":
-                if self.on_imu:
-                    imu_data = IMUData(
-                        timestamp_ns=data["timestampNs"],
-                        sequence_id=data["sequenceId"],
-                        angular_velocity=tuple(data["angularVelocity"]),
-                        linear_acceleration=tuple(data["linearAcceleration"]),
-                        magnetic_field=tuple(data.get("magneticField")) if data.get("magneticField") else None,
-                        attitude=tuple([data["attitude"]["roll"], data["attitude"]["pitch"], data["attitude"]["yaw"]]) if "attitude" in data else None,
-                        gravity=tuple(data["gravity"]) if data.get("gravity") else None
-                    )
-                    if asyncio.iscoroutinefunction(self.on_imu):
-                        await self.on_imu(imu_data)
-                    else:
-                        self.on_imu(imu_data)
+                await self._handle_imu(data)
+            elif msg_type == "mode_config":
+                return
             elif msg_type == "gps":
                 if self.on_gps:
                     gps_data = GPSData(
@@ -173,39 +161,6 @@ class ArvosClient:
                         await self.on_error(data.get("error"), data.get("details"))
                     else:
                         self.on_error(data.get("error"), data.get("details"))
-            elif msg_type == "watch_imu":
-                if self.on_watch_imu:
-                    watch_imu_data = WatchIMUData(
-                        timestamp_ns=data["timestampNs"],
-                        sequence_id= data["sequenceId"],
-                        watch_timestamp_ns=data["watchTimestampNs"],
-                        phone_received_timestamp_ns=data["phoneReceivedTimestampNs"],
-                        angular_velocity=tuple(data["angularVelocity"]),
-                        linear_acceleration=tuple(data["linearAcceleration"]),
-                        gravity=tuple(data["gravity"])
-                    )
-                    if asyncio.iscoroutinefunction(self.on_watch_imu):
-                        await self.on_watch_imu(watch_imu_data)
-                    else:
-                        self.on_watch_imu(watch_imu_data)
-            elif msg_type == "watch_attitude":
-                if self.on_watch_attitude:
-                    watch_attitude_data = WatchAttitudeData(
-                        timestamp_ns=data["timestampNs"],
-                        sequence_id=data["sequenceId"],
-                        watch_timestamp_ns= data["watchTimestampNs"],
-                        phone_received_timestamp_ns= data["phoneReceivedTimestampNs"],
-                        sensor_type=data["sensorType"],
-                        quaternion=tuple(data["quaternion"]),
-                        pitch=data["pitch"],
-                        roll=data["roll"],
-                        yaw=data["yaw"],
-                        reference_frame=data["referenceFrame"]
-                    )
-                    if asyncio.iscoroutinefunction(self.on_watch_attitude):
-                        await self.on_watch_attitude(watch_attitude_data)
-                    else:
-                        self.on_watch_attitude(watch_attitude_data)
             elif msg_type == "watch_activity":
                 if self.on_watch_activity:
                     # Convert boolean flags to state string
@@ -346,21 +301,40 @@ class ArvosClient:
             self.on_handshake(self.handshake)
 
     async def _handle_imu(self, data: Dict[str, Any]):
-        """Handle IMU data"""
+        """Parse phone and watch imu samples into the same model"""
+        raw_attitude = data.get("attitude")
+        attitude = None
+
+        if isinstance(raw_attitude, dict):
+            attitude = AttitudeData(
+                quaternion = tuple(raw_attitude.get("quaternion", [0, 0, 0, 1])),
+                roll = float(raw_attitude.get("roll", 0.0)),
+                pitch = float(raw_attitude.get("pitch", 0.0)),
+                yaw = float(raw_attitude.get("yaw", 0.0)),
+                reference_frame = str(raw_attitude.get("referenceFrame", "unknown")),
+            )
+
+        timestamp_ns = int(data.get("timestampNs", 0))
+        source_timestamp = data.get("sourceTimestampNs", timestamp_ns)
+        phone_received = data.get("phoneReceivedTimestampNs")
+
         imu_data = IMUData(
-            timestamp_ns=data.get("timestampNs", 0),
-            angular_velocity=tuple(data.get("angularVelocity", [0, 0, 0])),
-            linear_acceleration=tuple(data.get("linearAcceleration", [0, 0, 0])),
-            magnetic_field=tuple(data["magneticField"]) if "magneticField" in data else None,
-            attitude=tuple([
-                data["attitude"]["roll"],
-                data["attitude"]["pitch"],
-                data["attitude"]["yaw"]
-            ]) if "attitude" in data else None
+            timestamp_ns=timestamp_ns,
+            sequence_id = int(data.get("sequenceId", 0)),
+            source = str(data.get("source", "phone")),
+            source_timestamp_ns = int(source_timestamp) if source_timestamp is not None else timestamp_ns,
+            phone_received_timestamp_ns = int(phone_received) if phone_received is not None else None,
+            angular_velocity = tuple(data.get("angularVelocity", [0, 0, 0])),
+            linear_acceleration = tuple(data.get("linearAcceleration", [0, 0, 0])),
+            gravity = tuple(data["gravity"]) if data.get("gravity") is not None else None,
+            magnetic_field = tuple(data["magneticField"]) if data.get("magneticField") is not None else None,
+            attitude = attitude,
         )
 
-        if self.on_imu:
-            await self.on_imu(imu_data)
+        if self.on_imu is not None:
+            result = self.on_imu(imu_data)
+            if inspect.isawaitable(result):
+                await result
 
     async def _handle_gps(self, data: Dict[str, Any]):
         """Handle GPS data"""

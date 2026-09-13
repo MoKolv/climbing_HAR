@@ -373,7 +373,7 @@ struct SensorTestView: View {
                             label: "IMU",
                             content: {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    CompactDataRow(label: "Accel", x: imu.linearAcceleration.x, y: imu.linearAcceleration.y, z: imu.linearAcceleration.z, unit: "m/s²")
+                                    CompactDataRow(label: "Accel", x: imu.linearAcceleration.x, y: imu.linearAcceleration.y, z: imu.linearAcceleration.z, unit: "g")
                                     CompactDataRow(label: "Gyro", x: imu.angularVelocity.x, y: imu.angularVelocity.y, z: imu.angularVelocity.z, unit: "rad/s")
                                 }
                             }

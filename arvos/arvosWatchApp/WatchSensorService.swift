@@ -13,7 +13,7 @@ class WatchSensorService: ObservableObject {
     @Published private(set) var isStreaming = false
     @Published private(set) var currentHz: Double = 0
     @Published private(set) var sampleCount: Int = 0
-    @Published private(set) var latestAttitude: WatchAttitudeData?
+    @Published private(set) var latestAttitude: MotionAttitude?
     @Published private(set) var latestActivity: WatchMotionActivityData?
     
     private let motionManager = CMMotionManager()
@@ -285,14 +285,12 @@ class WatchSensorService: ObservableObject {
     // MARK: - Motion Handling
     
     private func handleMotionUpdate(_ motion: CMDeviceMotion) {
+        guard !sensorTransmissionPaused else {return}
         
-        guard !sensorTransmissionPaused else { return }
-        // Create timestamp (nanoseconds since reference date)
         let timestamp = UInt64(motion.timestamp * 1_000_000_000)
-        let sequencId = nextMotionSequenceId
+        let sequenceId = nextMotionSequenceId
         nextMotionSequenceId &+= 1
         
-        // Extract IMU data
         let angularVelocity = SIMD3<Double>(
             motion.rotationRate.x,
             motion.rotationRate.y,
@@ -305,58 +303,43 @@ class WatchSensorService: ObservableObject {
             motion.userAcceleration.z
         )
         
-        let gravity = SIMD3<Double>(
+        let gravity = SIMD3<Double> (
             motion.gravity.x,
             motion.gravity.y,
             motion.gravity.z
         )
         
-        // Create packet
-        guard let packet = WatchSensorPacket.imu(
+        let coreMotionAttitude = motion.attitude
+        let attitude = MotionAttitude(
+            quaternion: SIMD4(
+                coreMotionAttitude.quaternion.x,
+                coreMotionAttitude.quaternion.y,
+                coreMotionAttitude.quaternion.z,
+                coreMotionAttitude.quaternion.w
+            ),
+            pitch: coreMotionAttitude.pitch,
+            roll: coreMotionAttitude.roll,
+            yaw: coreMotionAttitude.yaw,
+            referenceFrame: "xArbitraryZVertical"
+        )
+        
+        guard let packet = WatchSensorPacket.motion(
             timestamp: timestamp,
-            sequenceId: sequencId,
+            sequenceId: sequenceId,
             angularVelocity: angularVelocity,
             linearAcceleration: linearAcceleration,
-            gravity: gravity
-        ) else {
-            return
-        }
-
-        // Send to phone
-        if !sensorTransmissionPaused {
-            connectivityService.send(packet: packet)
-        }
-        
-        
-        let attitude = motion.attitude
-        let quaternion = SIMD4<Double>(
-            attitude.quaternion.x,
-            attitude.quaternion.y,
-            attitude.quaternion.z,
-            attitude.quaternion.w
-        )
-        guard let attitudePacket = WatchSensorPacket.attitude(
-            timestamp: timestamp,
-            sequenceId: sequencId,
-            quaternion: quaternion,
-            pitch: attitude.pitch,
-            roll: attitude.roll,
-            yaw: attitude.yaw,
-            referenceFrame: "xArbitraryZVertical"
+            gravity: gravity,
+            attitude: attitude
         ) else {
             return
         }
         
-        if !sensorTransmissionPaused {
-            connectivityService.send(packet: attitudePacket)
-        }
+        connectivityService.send(packet: packet)
         
-        
-        // Update statistics
         DispatchQueue.main.async {
             self.sampleCount += 1
             self.updateFPS()
-            self.latestAttitude = attitudePacket.decodeAttitude()
+            self.latestAttitude = attitude
         }
     }
     

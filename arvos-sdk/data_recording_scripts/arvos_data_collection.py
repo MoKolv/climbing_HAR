@@ -14,8 +14,6 @@ from trial_upload_server import TrialUploadServer
 from arvos import (
     ArvosServer,
     IMUData,
-    WatchAttitudeData,
-    WatchIMUData,
     WatchMotionActivityData,
 )
 from participant_metadata import ParticipantMetadataStore, TrialReservation
@@ -499,20 +497,19 @@ async def main() -> None:
                     "post": post_sync_result,
                 })
 
-                for filename in ("watch_imu.csv", "watch_attitude.csv"):
-                    add_watch_server_timestamps(
-                        active_trial.trial_directory / filename,
-                        watch_phone_model,
-                        imu_phone_model,
-                    )
+
+                add_watch_server_timestamps(
+                    active_trial.trial_directory / "watch_imu.csv",
+                    watch_phone_model,
+                    imu_phone_model,
+                )
             else:
                 # Debug fallback: timestamps were already adjusted
                 # by the IMU phone using its available watch offset
-                for filename in ("watch_imu.csv", "watch_attitude.csv"):
-                    add_server_timestamps(
-                        active_trial.trial_directory / filename,
-                        imu_phone_model
-                    )
+                add_server_timestamps(
+                    active_trial.trial_directory / "watch_imu.csv",
+                    imu_phone_model
+                )
 
         if has_imu and has_video:
             try:
@@ -628,54 +625,51 @@ async def main() -> None:
 
     async def on_imu(data: IMUData) -> None:
         nonlocal last_sensor_arrival
-        state.mark_received("phone_imu")
+
+        if data.source == "phone":
+            stream_name = "imu"
+            state_source = "phone_imu"
+        elif data.source == "watch":
+            stream_name = "watch_imu"
+            state_source = "watch_imu"
+        else:
+            raise ValueError(f"Unknown stream {data.source}")
+
+        state.mark_received(state_source)
         last_sensor_arrival = monotonic()
 
-        if active_trial is not None:
-            active_trial.stage_row("imu", data.timestamp_ns,[
+        if active_trial is None:
+            return
+
+        attitude = data.attitude
+        quaternion = attitude.quaternion if attitude else (None, None, None, None)
+        roll = attitude.roll if attitude else None
+        pitch = attitude.pitch if attitude else None
+        yaw = attitude.yaw if attitude else None
+        reference_frame = attitude.reference_frame if attitude else ""
+        source_timestamp_ns = data.source_timestamp_ns or data.timestamp_ns
+        phone_received_timestamp_ns = data.phone_received_timestamp_ns if data.phone_received_timestamp_ns is not None else ""
+
+        active_trial.stage_row(
+            stream_name,
+            data.timestamp_ns,
+            [
                 data.sequence_id,
                 data.timestamp_ns,
                 data.timestamp_s,
+                data.source,
+                source_timestamp_ns,
+                phone_received_timestamp_ns,
                 *data.angular_velocity,
                 *data.linear_acceleration,
-                *(data.gravity if data.gravity else (0, 0 ,0)),
-            ])
-
-    async def on_watch_imu(data: WatchIMUData) -> None:
-        nonlocal last_sensor_arrival
-        state.mark_received("watch_imu")
-        last_sensor_arrival = monotonic()
-
-        if active_trial is not None:
-            active_trial.stage_row("watch_imu", data.timestamp_ns,[
-                data.sequence_id,
-                data.timestamp_ns,
-                data.timestamp_s,
-                data.watch_timestamp_ns,
-                data.phone_received_timestamp_ns,
-                *data.angular_velocity,
-                *data.linear_acceleration,
-            ])
-
-    async def on_watch_attitude(data: WatchAttitudeData) -> None:
-        nonlocal last_sensor_arrival
-        state.mark_received("watch_attitude")
-        last_sensor_arrival = monotonic()
-
-        if active_trial is not None:
-            active_trial.stage_row("watch_attitude", data.timestamp_ns,[
-                data.sequence_id,
-                data.timestamp_ns,
-                data.timestamp_s,
-                data.watch_timestamp_ns,
-                data.phone_received_timestamp_ns,
-                *data.quaternion,
-                data.roll,
-                data.pitch,
-                data.yaw,
-                data.reference_frame,
-            ])
-
+                *(data.gravity if data.gravity else (None, None, None)),
+                *quaternion,
+                roll,
+                pitch,
+                yaw,
+                reference_frame,
+            ]
+        )
     async def on_watch_activity(_: WatchMotionActivityData) -> None:
         return
 
@@ -747,8 +741,6 @@ async def main() -> None:
 
 
     server.on_imu = on_imu
-    server.on_watch_imu = on_watch_imu
-    server.on_watch_attitude = on_watch_attitude
     server.on_watch_activity = on_watch_activity
     server.on_connect = on_connect
     server.on_disconnect = on_disconnect

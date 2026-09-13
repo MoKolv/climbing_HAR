@@ -73,8 +73,6 @@ class ArvosServer:
         self.on_error = None
 
         # Apple Watch handlers
-        self.on_watch_imu = None
-        self.on_watch_attitude = None
         self.on_watch_activity = None
         self.on_watch_sync_result = None
         self.on_watch_stream_drained = None
@@ -443,8 +441,6 @@ class ArvosServer:
         temp_client.on_depth = self.on_depth
         temp_client.on_status = self.on_status
         temp_client.on_error = self.on_error
-        temp_client.on_watch_imu = self.on_watch_imu
-        temp_client.on_watch_attitude = self.on_watch_attitude
         temp_client.on_watch_activity = self.on_watch_activity
 
         # Handle message using client's parsing logic

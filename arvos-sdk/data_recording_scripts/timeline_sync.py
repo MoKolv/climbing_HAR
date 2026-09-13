@@ -142,7 +142,7 @@ def add_watch_server_timestamps(path: Path, watch_model: WatchClockModel, phone_
         writer.writeheader()
 
         for row in reader:
-            watch_ns = int(row["watch_timestamp_ns"])
+            watch_ns = int(row["source_timestamp_ns"])
             phone_ns = watch_model.to_phone_ns(watch_ns)
 
             row["timestamp_ns"] = phone_ns

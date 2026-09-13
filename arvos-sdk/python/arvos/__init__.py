@@ -4,9 +4,8 @@ Arvos SDK - Python client library for receiving iPhone sensor data
 
 from .client import ArvosClient
 from .data_types import (
-    IMUData, GPSData, PoseData, CameraFrame, DepthFrame,
-    HandshakeMessage, DeviceCapabilities,
-    WatchIMUData, WatchAttitudeData, WatchMotionActivityData
+    IMUData, GPSData, PoseData, CameraFrame, DepthFrame, AttitudeData,
+    HandshakeMessage, DeviceCapabilities, WatchMotionActivityData
 )
 from .server import ArvosServer
 
@@ -35,14 +34,13 @@ __all__ = [
     "ArvosClient",
     "ArvosServer",
     "IMUData",
+    "AttitudeData",
     "GPSData",
     "PoseData",
     "CameraFrame",
     "DepthFrame",
     "HandshakeMessage",
     "DeviceCapabilities",
-    "WatchIMUData",
-    "WatchAttitudeData",
     "WatchMotionActivityData",
 ]
 

@@ -9,8 +9,7 @@ import Foundation
 import Combine
 
 protocol WatchSensorManagerDelegate: AnyObject {
-    func watchSensorManager(_ manager: WatchSensorManager, didReceiveIMU data: WatchIMUNetworkData)
-    func watchSensorManager(_ manager: WatchSensorManager, didReceiveAttitude data: WatchAttitudeNetworkData)
+    func watchSensorManager(_ manager: WatchSensorManager, didReceiveIMU data: IMUData)
 }
 
 struct WatchTimeSyncResult {
@@ -36,7 +35,7 @@ class WatchSensorManager: ObservableObject {
     @Published private(set) var isWatchStreaming = false
     @Published private(set) var watchSampleCount: Int = 0
     @Published private(set) var watchHz: Double = 0
-    @Published private(set) var latestAttitude: WatchAttitudeData?
+    @Published private(set) var latestAttitude: MotionAttitude?
     @Published private(set) var latestActivity: WatchMotionActivityData?
     
     weak var delegate: WatchSensorManagerDelegate?
@@ -545,72 +544,40 @@ class WatchSensorManager: ObservableObject {
 
 extension WatchSensorManager: WatchConnectivityDelegate {
     func watchConnectivity(_ service: WatchConnectivityService, didReceivePacket packet: WatchSensorPacket) {
-        // Adjust timestamp
-        let rawWatchTimestampNs = packet.timestampNs
-        let phoneReceiveTimestampNs = phoneNowNs()
-       
-        // Handle different packet types
         switch packet.sensorType {
-                       
-        case "watch_imu":
+        case "watch_motion":
             let rawWatchTimestampNs = packet.timestampNs
             let phoneReceiveTimestampNs = phoneNowNs()
             
             guard let adjustedTimestamp = adjustTimestamp(rawWatchTimestampNs) else {
                 return
             }
-            guard let watchIMU = packet.decodeIMU() else {
-                print("❌Failed to decode IMU packet")
+            
+            guard let watchMotion = packet.decodeMotion() else {
+                #if DEBUG
+                print("Failed to decode watch motion packet")
+                #endif
                 return
             }
             
-    
-            // create watch network payload
-            let payload = WatchIMUNetworkData(
+            let sample = IMUData(
                 timestampNs: adjustedTimestamp,
-                sensorType: "watch_imu",
-                sequenceId: packet.sequenceId,
-                watchTimestampNs: rawWatchTimestampNs,
+                sourceTimestampNs: rawWatchTimestampNs,
                 phoneReceivedTimestampNs: phoneReceiveTimestampNs,
-                angularVelocity: watchIMU.angularVelocity,
-                linearAcceleration: watchIMU.linearAcceleration,
-                gravity: watchIMU.gravity
+                sequenceId: packet.sequenceId,
+                source: .watch,
+                angularVelocity: watchMotion.angularVelocity,
+                linearAcceleration: watchMotion.linearAcceleration,
+                gravity: watchMotion.gravity,
+                attitude: watchMotion.attitude
             )
-
-            // Forward to delegate
-            delegate?.watchSensorManager(self, didReceiveIMU: payload)
             
-            // Update published stats on the main thread
+            delegate?.watchSensorManager(self, didReceiveIMU: sample)
+            
             DispatchQueue.main.async {
                 self.watchSampleCount += 1
                 self.updateFPS()
-            }
-            
-        case "watch_attitude":
-            guard let adjustedTimestamp = adjustTimestamp(packet.timestampNs) else {
-                return
-            }
-            guard let attitude = packet.decodeAttitude() else { return }
-            
-            // create attitude payload
-            let payload = WatchAttitudeNetworkData(
-                timestampNs: adjustedTimestamp,
-                sensorType: "watch_attitude",
-                sequenceId: packet.sequenceId,
-                watchTimestampNs: rawWatchTimestampNs,
-                phoneReceivedTimestampNs: phoneReceiveTimestampNs,
-                quaternion: attitude.quaternion,
-                pitch: attitude.pitch,
-                roll: attitude.roll,
-                yaw: attitude.yaw,
-                referenceFrame: attitude.referenceFrame
-            )
-            
-            // forward to delegate
-            delegate?.watchSensorManager(self, didReceiveAttitude: payload)
-            
-            DispatchQueue.main.async {
-                self.latestAttitude = attitude
+                self.latestAttitude = watchMotion.attitude
             }
             
         case "watch_activity":
@@ -625,13 +592,14 @@ extension WatchSensorManager: WatchConnectivityDelegate {
     }
     
     func watchConnectivity(_ service: WatchConnectivityService, didChangeReachability isReachable: Bool) {
-        isWatchConnected = isReachable
-        
-        if !isReachable {
-            isWatchStreaming = false
-            watchHz = 0
+        DispatchQueue.main.async {
+            self.isWatchConnected = isReachable
+            
+            if !isReachable {
+                self.isWatchStreaming = false
+                self.watchHz = 0
+            }
         }
-        
     }
 }
 

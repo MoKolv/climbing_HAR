@@ -24,7 +24,6 @@ class TrialOutput:
         self._files: dict[str, TextIO] = {
             "imu": (trial_directory / "imu.csv").open("w", newline=""),
             "watch_imu": (trial_directory / "watch_imu.csv").open("w", newline=""),
-            "watch_attitude": (trial_directory / "watch_attitude.csv").open("w", newline=""),
             "phone_sync": (trial_directory / "phone_sync.csv").open("w", newline=""),
             "watch_sync": (trial_directory / "watch_sync.csv").open("w", newline=""),
             "stream_validation": (trial_directory / "stream_validation.csv").open("w", newline=""),
@@ -38,12 +37,12 @@ class TrialOutput:
 
         self._final_writers: dict[str, Any] = {
             name: self._writers[name]
-            for name in ("imu", "watch_imu", "watch_attitude")
+            for name in ("imu", "watch_imu")
         }
 
         self._flush_rows: dict[str, int] = {
             name: 0
-            for name in ("imu", "watch_imu", "watch_attitude")
+            for name in ("imu", "watch_imu")
         }
 
         self._last_flush: dict[str, float] = {
@@ -58,26 +57,18 @@ class TrialOutput:
         return self.trial_directory / "camera_video.mp4"
 
     def _write_headers(self) -> None:
-        self._writers["imu"].writerow([
+        imu_header = [
             "trial_id", "sequence_id", "timestamp_ns", "timestamp_s",
+            "source", "source_timestamp_ns", "phone_received_timestamp_ns",
             "ang_vel_x", "ang_vel_y", "ang_vel_z",
             "lin_acc_x", "lin_acc_y", "lin_acc_z",
             "gravity_x", "gravity_y", "gravity_z",
-        ])
-
-        self._writers["watch_imu"].writerow([
-            "trial_id", "sequence_id", "timestamp_ns", "timestamp_s",
-            "watch_timestamp_ns", "phone_received_timestamp_ns",
-            "ang_vel_x", "ang_vel_y", "ang_vel_z",
-            "lin_acc_x", "lin_acc_y", "lin_acc_z",
-        ])
-
-        self._writers["watch_attitude"].writerow([
-            "trial_id", "sequence_id", "timestamp_ns", "timestamp_s",
-            "watch_timestamp_ns", "phone_received_timestamp_ns",
             "quaternion_x", "quaternion_y", "quaternion_z", "quaternion_w",
             "roll", "pitch", "yaw", "reference_frame",
-        ])
+        ]
+
+        for stream_name in ("imu", "watch_imu"):
+            self._writers[stream_name].writerow(imu_header)
 
         self._writers["phone_sync"].writerow([
             "trial_id", "role", "phase", "server_minus_phone_offset_ns",

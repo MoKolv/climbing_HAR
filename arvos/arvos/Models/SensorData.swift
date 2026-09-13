@@ -21,25 +21,45 @@ protocol SensorData: Codable {
 
 // MARK: - IMU Data
 
-/// Accelerometer and gyroscope data from CoreMotion
+enum IMUSource: String, Codable {
+    case phone
+    case watch
+}
+
 struct IMUData: SensorData {
+    /// Timestamp in the relay iPhone's monotonic clock domain.
     let timestampNs: UInt64
-    let sensorType: String
+    
+    /// Raw timestamp from the device that captured the sample.
+    let sourceTimestampNs: UInt64
+    
+    /// Relay iPhone arrival time. It is nil for samples captured by the phone
+    let phoneReceivedTimestampNs: UInt64?
+    
     let sequenceId: UInt64
-
-    /// Angular velocity in rad/s (x, y, z)
+    let source: IMUSource
+    let sensorType: String
+    
+    /// Rotation rate in radians per second.
     let angularVelocity: SIMD3<Double>
-
-    /// Linear acceleration in m/s² (x, y, z)
+    
+    /// CoreMotion user acceleration in g.
     let linearAcceleration: SIMD3<Double>
-
-    /// Gravity vector in m/s² (for calibration reference)
+    
+    /// CoreMotion gravity vector in g.
     let gravity: SIMD3<Double>
-
+    
+    let attitude: MotionAttitude?
+    
     init(timestamp: UInt64, sequenceId: UInt64, motion: CMDeviceMotion) {
+        let coreMotionAttitude = motion.attitude
+        
         self.timestampNs = timestamp
-        self.sensorType = "imu"
+        self.sourceTimestampNs = timestamp
+        self.phoneReceivedTimestampNs = nil
         self.sequenceId = sequenceId
+        self.source = .phone
+        self.sensorType = "imu"
         self.angularVelocity = SIMD3(
             motion.rotationRate.x,
             motion.rotationRate.y,
@@ -55,61 +75,43 @@ struct IMUData: SensorData {
             motion.gravity.y,
             motion.gravity.z
         )
+        self.attitude = MotionAttitude(
+            quaternion: SIMD4(
+                coreMotionAttitude.quaternion.x,
+                coreMotionAttitude.quaternion.y,
+                coreMotionAttitude.quaternion.z,
+                coreMotionAttitude.quaternion.w
+            ),
+            pitch: coreMotionAttitude.pitch,
+            roll: coreMotionAttitude.roll,
+            yaw: coreMotionAttitude.yaw,
+            referenceFrame: "xArbitraryCorrectedZVertical"
+        )
     }
     
-    // Initializer for watch_imu data
-    init(timestampNs: UInt64, sequenceId: UInt64 = 0, sensorType: String = "imu", angularVelocity: SIMD3<Double>, linearAcceleration: SIMD3<Double>, gravity: SIMD3<Double> = SIMD3<Double>(0,0, -9.81)) {
-        
+    init (
+        timestampNs: UInt64,
+        sourceTimestampNs: UInt64,
+        phoneReceivedTimestampNs: UInt64?,
+        sequenceId: UInt64,
+        source: IMUSource,
+        angularVelocity: SIMD3<Double>,
+        linearAcceleration: SIMD3<Double>,
+        gravity: SIMD3<Double>,
+        attitude: MotionAttitude?
+    ) {
         self.timestampNs = timestampNs
-        self.sensorType = sensorType
-        self.angularVelocity = angularVelocity
-        self.linearAcceleration = linearAcceleration
-        self.gravity = gravity
+        self.sourceTimestampNs = sourceTimestampNs
+        self.phoneReceivedTimestampNs = phoneReceivedTimestampNs
         self.sequenceId = sequenceId
-    }
-
-    // Memberwise initializer for custom use
-    init(timestampNs: UInt64, sequenceId: UInt64, angularVelocity: SIMD3<Double>, linearAcceleration: SIMD3<Double>, gravity: SIMD3<Double> = SIMD3(0, 0, -9.81)) {
-        self.sequenceId = sequenceId
-        self.timestampNs = timestampNs
+        self.source = source
         self.sensorType = "imu"
         self.angularVelocity = angularVelocity
         self.linearAcceleration = linearAcceleration
         self.gravity = gravity
+        self.attitude = attitude
     }
 }
-
-// MARK: - Watch Network Data
-
-struct WatchIMUNetworkData: SensorData {
-    let timestampNs: UInt64 // adjusted to phone domain
-    let sensorType: String
-    let sequenceId: UInt64
-    
-    let watchTimestampNs: UInt64 // raw watch timestamp
-    let phoneReceivedTimestampNs: UInt64 // iPhone receive timestamp
-    
-    let angularVelocity: SIMD3<Double>
-    let linearAcceleration: SIMD3<Double>
-    let gravity: SIMD3<Double>
-        
-}
-
-struct WatchAttitudeNetworkData: SensorData {
-    let timestampNs: UInt64 // adjusted to phone domain
-    let sensorType: String
-    let sequenceId: UInt64
-    
-    let watchTimestampNs: UInt64  // raw watch timestamp
-    let phoneReceivedTimestampNs: UInt64 // iPhone receive timestamp
-    
-    let quaternion: SIMD4<Double>
-    let pitch: Double
-    let roll: Double
-    let yaw: Double
-    let referenceFrame: String
-}
-
 
 // MARK: - GPS Data
 

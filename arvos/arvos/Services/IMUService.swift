@@ -130,13 +130,22 @@ class IMUService {
             guard let self = self, let data = data else { return }
 
             let timestamp = Constants.Time.now()
-
-            // Create simplified IMU data with only acceleration
+            let sequenceId = self.takeNextSequenceId()
+            
             let imuData = IMUData(
                 timestampNs: timestamp,
+                sourceTimestampNs: timestamp,
+                phoneReceivedTimestampNs: nil,
+                sequenceId: sequenceId,
+                source: .phone,
                 angularVelocity: SIMD3<Double>(0, 0, 0),
-                linearAcceleration: SIMD3<Double>(data.acceleration.x, data.acceleration.y, data.acceleration.z),
-                gravity: SIMD3<Double>(0, 0, -9.81)
+                linearAcceleration: SIMD3(
+                    data.acceleration.x,
+                    data.acceleration.y,
+                    data.acceleration.z
+                ),
+                gravity: SIMD3<Double>(0, 0, 0),
+                attitude: nil
             )
 
             self.delegate?.imuService(self, didUpdate: imuData)

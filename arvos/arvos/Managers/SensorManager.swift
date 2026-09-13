@@ -662,24 +662,15 @@ extension SensorManager: GPSServiceDelegate {
 // MARK: - Watch Sensor Manager Delegate
 
 extension SensorManager: WatchSensorManagerDelegate {
-    func watchSensorManager(_ manager: WatchSensorManager, didReceiveIMU data: IMUData) {
-        
-        print("Watch IMU delegate received")
-        print("Watch IMU forwarding via networkManager \(ObjectIdentifier(networkManager))")
-        // Stream to network
+    func watchSensorManager(
+        _ manager: WatchSensorManager,
+        didReceiveIMU data: IMUData
+    ) {
         networkManager.stream(imuData: data)
         
-        // Record if enabled
         if recordingManager.isRecording {
             recordingManager.record(imuData: data)
         }
-    }
-    func watchSensorManager(_ manager: WatchSensorManager, didReceiveIMU data: WatchIMUNetworkData) {
-        networkManager.stream(watchIMUNetworkData: data)
-    }
-    
-    func watchSensorManager(_ manager:WatchSensorManager, didReceiveAttitude data: WatchAttitudeNetworkData){
-        networkManager.stream(watchAttitudeNetworkData: data)
     }
 }
 

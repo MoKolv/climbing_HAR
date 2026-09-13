@@ -33,8 +33,8 @@ class SensorTestViewModel: ObservableObject {
     @Published var latestIMU: IMUData?
     @Published var latestPose: PoseData?
     @Published var latestGPS: GPSData?
-    @Published var latestWatchIMU: WatchIMUNetworkData?
-    @Published var latestWatchAttitude: WatchAttitudeData?
+    @Published var latestWatchIMU: IMUData?
+    @Published var latestWatchAttitude: MotionAttitude?
     @Published var latestWatchActivity: WatchMotionActivityData?
     @Published var watchConnected = false
     @Published var watchHz: Double = 0
@@ -231,24 +231,13 @@ extension SensorTestViewModel: GPSServiceDelegate {
 // MARK: - WatchSensorManagerDelegate
 
 extension SensorTestViewModel: WatchSensorManagerDelegate {
-    func watchSensorManager(_ manager: WatchSensorManager, didReceiveIMU data: WatchIMUNetworkData) {
+    func watchSensorManager(
+        _ manager: WatchSensorManager,
+        didReceiveIMU data: IMUData
+    ) {
         DispatchQueue.main.async {
-            if self.showWatch {
+            if self.showIMU {
                 self.latestWatchIMU = data
-                self.recordSensorUpdate()
-            }
-        }
-    }
-    func watchSensorManager(_ manager: WatchSensorManager, didReceiveAttitude data: WatchAttitudeNetworkData){
-        DispatchQueue.main.async {
-            if self.showWatch {
-                self.latestWatchAttitude = WatchAttitudeData(
-                    quaternion: data.quaternion,
-                    pitch: data.pitch,
-                    roll: data.roll,
-                    yaw: data.yaw,
-                    referenceFrame: data.referenceFrame
-                )
                 self.recordSensorUpdate()
             }
         }

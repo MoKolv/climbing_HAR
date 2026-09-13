@@ -4,25 +4,37 @@ Tests for Arvos data types
 
 import pytest
 import numpy as np
-from arvos.data_types import IMUData, GPSData, PoseData, CameraFrame, DepthFrame
+from arvos.data_types import IMUData, GPSData, PoseData, CameraFrame, DepthFrame, AttitudeData
 
 
 def test_imu_data():
     """Test IMUData creation and properties"""
+    attitude = AttitudeData(
+        quaternion=(0.0, 0.0, 0.0, 1.0),
+        roll=0.1,
+        pitch=0.2,
+        yaw=0.3,
+        reference_frame="xArbitraryCorrectedZVertical",
+    )
     data = IMUData(
-        timestamp_ns=1700000000000,
+        timestamp_ns=1_700_000_000,
+        sequence_id=7,
+        source="phone",
+        source_timestamp_ns=1_700_000_000,
         angular_velocity=(0.1, 0.2, 0.3),
         linear_acceleration=(1.0, 2.0, 3.0),
+        gravity=(0.0, 0.0, -1.0),
         magnetic_field=(10.0, 20.0, 30.0),
-        attitude=(0.1, 0.2, 0.3)
+        attitude=attitude,
     )
 
-    assert data.timestamp_ns == 1700000000000
     assert data.timestamp_s == 1.7
+    assert data.source == "phone"
+    assert data.sequence_id == 7
+    assert tuple(data.attitude) == (0.1, 0.2, 0.3)
     assert isinstance(data.angular_velocity_array, np.ndarray)
     assert isinstance(data.linear_acceleration_array, np.ndarray)
-    assert len(data.angular_velocity_array) == 3
-    assert len(data.linear_acceleration_array) == 3
+    assert isinstance(data.attitude.quaternion_array, np.ndarray)
 
 
 def test_gps_data():

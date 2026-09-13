@@ -24,17 +24,14 @@ class RecordingState:
     enabled_video: bool = True
     enabled_phone_imu: bool = True
     enabled_watch_imu: bool = True
-    enabled_watch_attitude: bool = True
 
     last_video_received: datetime | None = None
     last_phone_imu_received: datetime | None = None
     last_watch_imu_received: datetime | None = None
-    last_watch_attitude_received: datetime | None = None
 
     video_frame_count: int = 0
     phone_imu_count: int = 0
     watch_imu_count: int = 0
-    watch_attitude_count: int = 0
 
     def mark_received(self, source:str) -> None:
         now = datetime.now()
@@ -48,9 +45,6 @@ class RecordingState:
         elif source == "watch_imu":
             self.last_watch_imu_received = now
             self.watch_imu_count += 1
-        elif source == "watch_attitude":
-            self.last_watch_attitude_received = now
-            self.watch_attitude_count += 1
         else:
             raise ValueError(f"Unknown source: {source}")
 
@@ -59,7 +53,6 @@ class RecordingState:
             "video": self.last_video_received,
             "phone_imu": self.last_phone_imu_received,
             "watch_imu": self.last_watch_imu_received,#
-            "watch_attitude": self.last_watch_attitude_received,
         } [source]
 
         if last is None:
