@@ -798,7 +798,7 @@ extension NetworkManager: WebSocketServiceDelegate {
             
         case "stop_imu_watch_streaming":
             guard let stopAt = uint64Parameter("stopAtServerNs", in: json) else { return }
-            schedule(serverTimestampNs: stopAt, syncPhase: "post") {
+            schedule(serverTimestampNs: stopAt, syncPhase: "pre") {
                 self.stopExperimentStreaming()
             }
       
@@ -865,37 +865,66 @@ extension NetworkManager: WebSocketServiceDelegate {
                 SensorManager.shared.cancelLocalVideoTrial()
             }
             
-        case "stop_video_recording":
-            guard let stopAt = uint64Parameter("stopAtServerNs", in: json) else { return }
+        case "stop_video_capture":
+            guard let stopAt = uint64Parameter("stopAtServerNs", in: json) else {
+                sendError("invalid_video_stop_command", details: nil)
+                return
+            }
             
-            schedule(serverTimestampNs: stopAt, syncPhase: "post") {
-                guard
-                    let pre = self.phoneClockSynchronizer.result(for: "pre"),
-                    let post = self.phoneClockSynchronizer.result(for: "post"),
-                    let localStop = self.phoneClockSynchronizer.phoneTime(forServerTime: stopAt, phase: "post")
-                else { return }
-                
-                SensorManager.shared.finishLocalVideoRecording(
-                    stopAtPhoneTimestampNs: localStop,
+            guard let localStop = phoneClockSynchronizer.phoneTime(forServerTime: stopAt, phase: "pre") else {
+                sendError("clock_not_synchronized", details: "No pre phone-clock result for video stop")
+                return
+            }
+            
+            DispatchQueue.main.async {
+                SensorManager.shared.scheduleLocalVideoCaptureStop(atPhoneTimestampNs: localStop) { result in
+                    switch result {
+                    case .success(let trialId):
+                        do {
+                            try self.sendJSON(VideoCaptureStoppedMessage(trialId: trialId))
+                        } catch {
+                            self.sendError("video_stop_ack_failed", details: error.localizedDescription)
+                        }
+                    case .failure(let error):
+                        self.sendError("video_stop_failed", details: error.localizedDescription)
+                    }
+                }
+            }
+            
+        case "finalize_video_recording":
+            guard
+                let pre = phoneClockSynchronizer.result(for: "pre"),
+                let post = phoneClockSynchronizer.result(for: "post")
+            else {
+                sendError("video_finish_failed", details: "Pre/post phone-clock results are unavailable")
+                return
+            }
+            
+            DispatchQueue.main.async {
+                SensorManager.shared.finalizeLocalVideoRecording(
                     preSync: pre,
-                    postSync: post
+                    postSync: post,
                 ) { result in
                     switch result {
                     case .success(let completedVideo):
-                        self.trialFileUploader.upload(completedVideo: completedVideo) {
-                            uploadResult in
+                        self.trialFileUploader.upload(
+                            completedVideo: completedVideo
+                        ) { uploadResult in
                             switch uploadResult {
-                            case .success(let success):
+                            case .success:
                                 try? self.sendJSON(VideoUploadFinishedMessage(trialId: completedVideo.trialId))
                             case .failure(let error):
                                 self.sendError("video_upload_failed", details: error.localizedDescription)
                             }
+                            
                         }
                     case .failure(let error):
                         self.sendError("video_finish_failed", details: error.localizedDescription)
                     }
+                    
                 }
             }
+            
             
         case "change_mode":
             if let modeString = json["mode"] as? String,
