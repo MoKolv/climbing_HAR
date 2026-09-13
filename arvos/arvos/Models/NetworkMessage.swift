@@ -38,6 +38,11 @@ struct VideoRecordingArmedMessage: Encodable {
     let trialId: String
 }
 
+struct VideoCaptureStoppedMessage: Encodable {
+    let type = "video_capture_stopped"
+    let trialId: String
+}
+
 struct VideoUploadFinishedMessage: Encodable {
     let type = "video_upload_finished"
     let trialId: String

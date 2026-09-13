@@ -34,9 +34,18 @@ class SensorManager: ObservableObject {
     
     enum LocalVideoTrialError: LocalizedError {
         case alreadyActive
+        case notActive
+        case captureNotStopped
         
         var errorDescription: String? {
-            "A video trial is already active"
+            switch self {
+            case .alreadyActive:
+                return "A video trial is already active"
+            case .notActive:
+                return "No local video trial is active"
+            case .captureNotStopped:
+                return "Video capture must stop before finalization"
+            }
         }
     }
 
@@ -52,6 +61,7 @@ class SensorManager: ObservableObject {
     private let networkManager = NetworkManager.shared
     private let recordingManager = RecordingManager()
     private var localVideoRecorder: VideoRecorder?
+    private var localVideoCaptureStopped = false
 
     private var cameraServiceRunning = false
     var usingARKitCamera = false // Exposed for sensor test view
@@ -347,6 +357,7 @@ class SensorManager: ObservableObject {
         }
         
         localVideoRecorder = recorder
+        localVideoCaptureStopped = false
         cameraService.start()
         cameraServiceRunning = true
         sensorStatuses.camera = .active
@@ -369,6 +380,7 @@ class SensorManager: ObservableObject {
             guard let self else { return }
             
             localVideoRecorder = nil
+            localVideoCaptureStopped = false
             cameraServiceRunning = false
             isStreaming = false
             currentFPS = 0
@@ -379,31 +391,72 @@ class SensorManager: ObservableObject {
         }
     }
     
-    func finishLocalVideoRecording(
-        stopAtPhoneTimestampNs: UInt64,
+    func scheduleLocalVideoCaptureStop(
+        atPhoneTimestampNs timestampNs: UInt64,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        guard let recorder = localVideoRecorder else {
+            completion(.failure(LocalVideoTrialError.notActive))
+            return
+        }
+        // frames after boundary timestamp are rejected
+        recorder.stopAcceptingFrames(atPhoneTimestampsNs: timestampNs)
+        
+        let now = Constants.Time.now()
+        let delayNs = timestampNs > now ? timestampNs - now : 0
+        
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Double(delayNs) / 1_000_000_000
+        ) { [self] in
+            guard localVideoRecorder === recorder else {
+                completion(.failure(LocalVideoTrialError.notActive))
+                return
+            }
+            
+            cameraService.stop { [self] in
+                guard localVideoRecorder === recorder else {
+                    completion(.failure(LocalVideoTrialError.notActive))
+                    return
+                }
+                
+                localVideoCaptureStopped = true
+                cameraServiceRunning = false
+                isStreaming = false
+                currentFPS = 0
+                sensorStatuses.camera = .inactive
+                networkManager.sendStatus("stopped")
+                completion(.success(recorder.trialId))
+            }
+        }
+    }
+    
+    func finalizeLocalVideoRecording(
         preSync: PhoneClockSyncResult,
         postSync: PhoneClockSyncResult,
         completion: @escaping (Result<CompletedLocalVideo, Error>) -> Void
     ) {
         guard let recorder = localVideoRecorder else {
-            completion(.failure(VideoRecorder.RecorderError.noFrames))
+            completion(.failure(LocalVideoTrialError.notActive))
             return
         }
         
-        recorder.stopAcceptingFrames(atPhoneTimestampsNs: stopAtPhoneTimestampNs)
-        cameraService.stop {[weak self] in
-            recorder.finish(preSync: preSync, postSync: postSync) { result in
-                self?.localVideoRecorder = nil
-                self?.cameraServiceRunning = false
-                self?.isStreaming = false
-                self?.currentFPS = 0
-                self?.frameTimestamps.removeAll()
-                self?.sensorStatuses = SensorStatuses()
-                self?.networkManager.sendStatus("stopped")
-                completion(result)
-            }
+        guard localVideoCaptureStopped else {
+            completion(.failure(LocalVideoTrialError.captureNotStopped))
+            return
+        }
+        
+        recorder.finish(preSync: preSync, postSync: postSync) { [self] result in
+            localVideoRecorder = nil
+            localVideoCaptureStopped = false
+            cameraServiceRunning = false
+            isStreaming = false
+            currentFPS = 0
+            frameTimestamps.removeAll()
+            sensorStatuses = SensorStatuses()
+            completion(result)
         }
     }
+    
 
     // MARK: - Burst Scan
 

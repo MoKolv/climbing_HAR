@@ -53,6 +53,10 @@ class ArvosServer:
             Callable[[str, dict[str, Any]], Awaitable[None] | None]
         ] = None
 
+        self.on_video_capture_stopped: Optional[
+            Callable[[str, dict[str, Any]], Awaitable[None] | None]
+        ] = None
+
         self.on_video_upload_finished: Optional[
             Callable[[str, dict[str, Any]], Awaitable[None] | None]
         ] = None
@@ -271,6 +275,14 @@ class ArvosServer:
                 self.on_video_recording_armed,
                 role,
                 data
+            )
+            return True
+
+        if message_type == "video_capture_stopped":
+            await self._invoke_callback(
+                self.on_video_capture_stopped,
+                role,
+                data,
             )
             return True
 

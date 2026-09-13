@@ -47,6 +47,7 @@ async def main() -> None:
     watch_drain_event = asyncio.Event()
     phone_sync_events = {"pre": asyncio.Event(), "post": asyncio.Event()}
     video_armed_event = asyncio.Event()
+    video_capture_stopped_event = asyncio.Event()
 
 
     pre_sync_result: dict | None = None
@@ -216,6 +217,7 @@ async def main() -> None:
             post_sync_event.clear()
             watch_drain_event.clear()
             video_armed_event.clear()
+            video_capture_stopped_event.clear()
 
             for phase in ("pre", "post"):
                 phone_sync_results[phase].clear()
@@ -356,7 +358,7 @@ async def main() -> None:
         trial_stop_requested_server_ns = monotonic_ns()
 
         print("\n🟥 Stopping recording")
-        print("Finalizing trial")
+        print("Stopping capture at a shared timestamp")
 
         post_sync_result = None
         watch_drain_result = None
@@ -365,6 +367,56 @@ async def main() -> None:
         watch_drain_event.clear()
         phone_sync_results["post"].clear()
         phone_sync_events["post"].clear()
+
+        stop_at_server_ns = monotonic_ns() + 1_000_000_000
+
+        capture_stop_commands = []
+
+        if has_video:
+            capture_stop_commands.append(
+                server.send_command_to_role(
+                    VIDEO_ROLE,
+                    "stop_video_capture",
+                    stopAtServerNs = stop_at_server_ns,
+                )
+            )
+
+        if has_imu:
+            capture_stop_commands.append(
+                server.send_command_to_role(
+                    IMU_WATCH_ROLE,
+                    "stop_imu_watch_streaming",
+                    stopAtServerNs = stop_at_server_ns,
+                )
+            )
+
+        await asyncio.gather(*capture_stop_commands)
+
+        capture_stop_waits = []
+
+        if has_video:
+            capture_stop_waits.append(
+                asyncio.wait_for(
+                    video_capture_stopped_event.wait(),
+                    timeout = 15.0,
+                )
+            )
+
+        if active_watch_expected:
+            capture_stop_waits.append(
+                asyncio.wait_for(
+                    watch_drain_event.wait(),
+                    timeout = 60.0,
+                )
+            )
+
+        if capture_stop_waits:
+            await asyncio.gather(*capture_stop_waits)
+
+        if has_imu:
+            await wait_for_sensor_drain()
+
+        print("Capture stopped; measuring post-trial clock offsets 🕐")
 
         post_sync_commands = []
 
@@ -397,12 +449,18 @@ async def main() -> None:
         await asyncio.gather(*post_sync_commands)
 
         post_sync_waits = [
-            asyncio.wait_for(phone_sync_events["post"].wait(), timeout=30.0),
+            asyncio.wait_for(
+                phone_sync_events["post"].wait(),
+                timeout = 30.0,
+            )
         ]
 
         if active_watch_expected:
             post_sync_waits.append(
-                asyncio.wait_for(post_sync_event.wait(), timeout=30.0)
+                asyncio.wait_for(
+                    post_sync_event.wait(),
+                    timeout = 30.0,
+                )
             )
 
         await asyncio.gather(*post_sync_waits)
@@ -412,58 +470,29 @@ async def main() -> None:
                 await fail_active_trial("post_sync_failed")
                 return
 
-            print(
-                "Debug mode: Watch post-sync failed;"
-                "using the existing adjusted timestamps"
-            )
-
-        stop_at_server_ns = monotonic_ns() + 1_000_000_000
+            print("Debug mode: Watch post-sync failed, using the existing adjusted timestamps")
 
         if has_imu:
             imu_post_offset = int(
                 phone_sync_results["post"][IMU_WATCH_ROLE]["serverMinusPhoneOffsetNs"]
             )
-            staging_stop_ns = trial_stop_requested_server_ns - imu_post_offset
+            staging_stop_ns = stop_at_server_ns - imu_post_offset
         else:
-            staging_stop_ns = trial_stop_requested_server_ns
-
-        stop_commands = []
-
-        if has_video:
-            stop_commands.append(
-                server.send_command_to_role(
-                    VIDEO_ROLE,
-                    "stop_video_recording",
-                    stopAtServerNs = stop_at_server_ns,
-                )
-            )
-
-        if has_imu:
-            stop_commands.append(
-                server.send_command_to_role(
-                    IMU_WATCH_ROLE,
-                    "stop_imu_watch_streaming",
-                    stopAtServerNs = stop_at_server_ns,
-                )
-            )
-
-        await asyncio.gather(*stop_commands)
+            staging_stop_ns = stop_at_server_ns
 
         if has_video:
             if active_upload_token is None:
                 raise RuntimeError("Video trial has no upload token")
 
+            await server.send_command_to_role(
+                VIDEO_ROLE,
+                "finalize_video_recording",
+            )
+
             await upload_server.wait_for_trial_files(
                 active_upload_token,
                 timeout = 300.0,
             )
-
-        if active_watch_expected:
-            await asyncio.wait_for(watch_drain_event.wait(), timeout=60.0)
-
-        if has_imu:
-            await wait_for_sensor_drain()
-
 
         summary = active_trial.finalize(staging_stop_ns)
 
@@ -739,6 +768,10 @@ async def main() -> None:
         if role == VIDEO_ROLE:
             video_armed_event.set()
 
+    async def on_video_capture_stopped(role: str, data: dict) -> None:
+        if role == VIDEO_ROLE:
+            video_capture_stopped_event.set()
+
 
     server.on_imu = on_imu
     server.on_watch_activity = on_watch_activity
@@ -751,6 +784,7 @@ async def main() -> None:
     server.on_client_role_disconnect = on_client_role_disconnect
     server.on_phone_clock_sync_result = on_phone_clock_sync_result
     server.on_video_recording_armed = on_video_recording_armed
+    server.on_video_capture_stopped = on_video_capture_stopped
 
     key_handlers = {
         "q": quit_program,
