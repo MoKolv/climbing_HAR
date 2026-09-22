@@ -61,7 +61,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "2A91EA6D2EC3DEC1000EBD56"
             BuildableName = "arvosWatchApp.app"
-            BlueprintName = "arvosWatchApp"
             ReferencedContainer = "container:arvos.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -78,7 +77,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "2A91EA6D2EC3DEC1000EBD56"
             BuildableName = "arvosWatchApp.app"
-            BlueprintName = "arvosWatchApp"
             ReferencedContainer = "container:arvos.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
