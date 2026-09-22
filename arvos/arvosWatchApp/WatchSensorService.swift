@@ -8,6 +8,7 @@
 import Foundation
 import CoreMotion
 import Combine
+import HealthKit
 
 class WatchSensorService: ObservableObject {
     @Published private(set) var isStreaming = false
@@ -20,9 +21,17 @@ class WatchSensorService: ObservableObject {
     private let activityManager = CMMotionActivityManager()
     private let connectivityService = WatchConnectivityService.shared
     
-    private var updateTimer: Timer?
-    private var sampleTimestamps: [TimeInterval] = []
-    private let fpsWindow: TimeInterval = 1.0
+    
+    @Published private(set) var isBackgroundRuntimeActive = false
+    @Published private(set) var backgroundRuntimeError: String?
+    
+    private let workoutRuntime = WorkoutRuntimeController()
+    private var cancellables = Set<AnyCancellable>()
+    
+    private var uiWindowStartNs = WatchTime.now()
+    private var uiWindowSampleCount = 0
+    private var lastUIUpdateNs: UInt64 = 0
+    private let uiUpdateIntervalNs: UInt64 = 250_000_000
     
     private let motionQueue: OperationQueue = {
         let queue = OperationQueue()
@@ -38,7 +47,7 @@ class WatchSensorService: ObservableObject {
         return queue
     }()
     
-    private var isMotionCaptureRunninging = false
+    private var isMotionCaptureRunning = false
     private var resumeCaptureAfterSyncPause = false
     private var sensorTransmissionPaused = false
     private var nextMotionSequenceId: UInt64 = 0
@@ -54,17 +63,27 @@ class WatchSensorService: ObservableObject {
     init() {
         setupMotionManager()
         setupCommandObserver()
-    }
-
-    deinit {
-        updateTimer?.invalidate()
+        
+        workoutRuntime.$isRunning
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isRunning in
+                self?.isBackgroundRuntimeActive = isRunning
+            }
+            .store(in: &cancellables)
+        
+        workoutRuntime.$lastError
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] error in
+                self?.backgroundRuntimeError = error
+            }
+            .store(in: &cancellables)
     }
 
     private func setupCommandObserver() {
         NotificationCenter.default.addObserver(
             forName: .watchCommandReceived,
             object: nil,
-            queue: nil
+            queue: .main
         ) { [weak self] notification in
             guard let self = self,
                   let command = notification.userInfo?["command"] as? String,
@@ -123,8 +142,25 @@ class WatchSensorService: ObservableObject {
             ?? (parameters["preserveBuffer"] as? NSNumber)?.boolValue
             ?? false
             
+            if !preserveBuffer {
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    
+                    do {
+                        try await self.workoutRuntime.start()
+                    } catch {
+                        self.backgroundRuntimeError = error.localizedDescription
+                        self.connectivityService.sendCommand(
+                            "watch_runtime_error",
+                            parameters: ["dtails": error.localizedDescription]
+                        )
+                    }
+                    
+                }
+            }
+            
             sensorTransmissionPaused = true
-            resumeCaptureAfterSyncPause = isStreaming && isMotionCaptureRunninging
+            resumeCaptureAfterSyncPause = isStreaming && isMotionCaptureRunning
             
             stopMotionCapture()
             connectivityService.pauseSensorDelivery()
@@ -165,7 +201,7 @@ class WatchSensorService: ObservableObject {
     }
     
     private func startMotionCapture() {
-        guard !isMotionCaptureRunninging else { return }
+        guard !isMotionCaptureRunning else { return }
         
         motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, error in
             guard let self, let motion else {
@@ -186,22 +222,20 @@ class WatchSensorService: ObservableObject {
             print("Motion activity classification not available on this watch")
         }
         
-        isMotionCaptureRunninging = true
+        isMotionCaptureRunning = true
             
     }
 
     private func stopMotionCapture(resetDisplayedHz: Bool = true) {
-        guard isMotionCaptureRunninging else {return}
+        guard isMotionCaptureRunning else {return}
         
         motionManager.stopDeviceMotionUpdates()
         
         if CMMotionActivityManager.isActivityAvailable() {
             activityManager.stopActivityUpdates()
         }
-        
-        updateTimer?.invalidate()
-        updateTimer = nil
-        isMotionCaptureRunninging = false
+    
+        isMotionCaptureRunning = false
         
         if resetDisplayedHz {
             DispatchQueue.main.async {
@@ -228,13 +262,28 @@ class WatchSensorService: ObservableObject {
         motionManager.deviceMotionUpdateInterval = updateInterval
         
         nextMotionSequenceId = 0
+        uiWindowStartNs = WatchTime.now()
+        uiWindowSampleCount = 0
+        lastUIUpdateNs = 0
         connectivityService.resetSensorTransportMetrics()
+        
+        if !workoutRuntime.isRunning {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                
+                do {
+                    try await self.workoutRuntime.start()
+                } catch {
+                    self.backgroundRuntimeError = error.localizedDescription
+                }
+            }
+        }
+        
         startMotionCapture()
         
         DispatchQueue.main.async {
             self.isStreaming = true
             self.sampleCount = 0
-            self.sampleTimestamps.removeAll()
         }
         
         print(" Watch sensor streaming started at \(targetHz) Hz")
@@ -257,29 +306,37 @@ class WatchSensorService: ObservableObject {
             self.currentHz = 0
         }
         
-        connectivityService.drainSensorPackets {[weak self] in
+        connectivityService.drainSensorPackets { [weak self] in
             guard let self else { return }
             
             self.connectivityService.sendCommand(
                 "watch_stream_drained",
-                parameters: ["captured_sample_count": NSNumber(value: capturedSampleCount),]
-                )
+                parameters: ["captured_sample_count": NSNumber(value: capturedSampleCount)]
+            )
             
-            print("Watch sensor queue drainer: \(capturedSampleCount) motion samples")
+            // Keep background execution alive until every queued sensor batch has finished
+            self.workoutRuntime.stop()
+            print("Watch sensor queue drained: \(capturedSampleCount) motion samples")
         }
+        
         print("Watch capture stopped; draining queued packets")
      }
     
     func updateFrequency(_ hz: Int) {
-        let newHz = min(hz, 100)
+        let newHz = min(max(hz, 1), 100)
         guard newHz != targetHz else { return }
         
         targetHz = newHz
+        motionManager.deviceMotionUpdateInterval = updateInterval
         
-        if isStreaming {
-            stopStreaming()
-            startStreaming(hz: targetHz)
+        guard isStreaming,
+              isMotionCaptureRunning,
+              !sensorTransmissionPaused else {
+            return
         }
+        
+        stopMotionCapture(resetDisplayedHz: false)
+        startMotionCapture()
     }
     
     // MARK: - Motion Handling
@@ -336,22 +393,34 @@ class WatchSensorService: ObservableObject {
         
         connectivityService.send(packet: packet)
         
-        DispatchQueue.main.async {
-            self.sampleCount += 1
-            self.updateFPS()
-            self.latestAttitude = attitude
-        }
+        updateDisplayedState(sequenceId: sequenceId, attitude: attitude)
     }
     
-    private func updateFPS() {
-        let now = Date().timeIntervalSinceReferenceDate
-        sampleTimestamps.append(now)
+    private func updateDisplayedState(
+        sequenceId: UInt64,
+        attitude: MotionAttitude,
+    ) {
+        let nowNs = WatchTime.now()
+        uiWindowSampleCount += 1
         
-        // Remove old timestamps
-        sampleTimestamps.removeAll { now - $0 > fpsWindow }
+        guard lastUIUpdateNs == 0 || nowNs - lastUIUpdateNs >= uiUpdateIntervalNs else {
+            return
+        }
         
-        // Calculate FPS
-        currentHz = Double(sampleTimestamps.count) / fpsWindow
+        let elapsedNs = max(nowNs - uiWindowStartNs, 1)
+        let measuredHz = Double(uiWindowSampleCount) * 1_000_000_000 / Double(elapsedNs)
+        lastUIUpdateNs = nowNs
+        
+        if elapsedNs >= 1_000_000_000 {
+            uiWindowStartNs = nowNs
+            uiWindowSampleCount = 0
+        }
+        
+        DispatchQueue.main.async {
+            self.sampleCount = Int(sequenceId + 1)
+            self.currentHz = measuredHz
+            self.latestAttitude = attitude
+        }
     }
     
     private func handleActivityUpdate(_ activity: CMMotionActivity) {
@@ -380,6 +449,10 @@ class WatchSensorService: ObservableObject {
             self.latestActivity = activityData
         }
     }
+    
+    func prepareBackgroundRuntime() async {
+        await workoutRuntime.prepareAuthorization()
+    }
 
     // MARK: - Future Extensions
     
@@ -388,10 +461,115 @@ class WatchSensorService: ObservableObject {
         // TODO: Implement HealthKit heart rate monitoring
         print("⚠️ Heart rate monitoring not yet implemented")
     }
+}
+
+// MARK: Workout Session
+@MainActor
+final class WorkoutRuntimeController: NSObject, ObservableObject {
+    enum RuntimeError: LocalizedError {
+        case healthDataUnavailable
+        case authorizationDenied
+        
+        var errorDescription: String? {
+            switch self {
+            case .healthDataUnavailable:
+                return "Health data is unavailable on this watch"
+            case .authorizationDenied:
+                return "Workout permission was not granted"
+            }
+        }
+    }
     
-    // Placeholder for workout metrics
-    func startWorkoutSession() {
-        // TODO: Implement workout session with metrics
-        print("⚠️ Workout session not yet implemented")
+    @Published private(set) var isRunning = false
+    @Published private(set) var lastError: String?
+    
+    private let healthStore = HKHealthStore()
+    private let workoutType = HKObjectType.workoutType()
+    private var workoutSession: HKWorkoutSession?
+    
+    func prepareAuthorization() async {
+        do {
+            try await authorizeIfNeeded()
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+    
+    func start() async throws {
+        guard workoutSession == nil else { return }
+        
+        try await authorizeIfNeeded()
+        
+        let configuration = HKWorkoutConfiguration()
+        configuration.activityType = .climbing
+        configuration.locationType = .indoor
+        
+        let session = try HKWorkoutSession(
+            healthStore: healthStore,
+            configuration: configuration
+        )
+        
+        session.delegate = self
+        workoutSession = session
+        lastError = nil
+        session.startActivity(with: Date())
+    }
+    
+    func stop() {
+        workoutSession?.end()
+    }
+    
+    private func authorizeIfNeeded() async throws {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            throw RuntimeError.healthDataUnavailable
+        }
+        
+        switch healthStore.authorizationStatus(for: workoutType) {
+        case .sharingAuthorized:
+            return
+        case .sharingDenied:
+            throw RuntimeError.authorizationDenied
+        case .notDetermined:
+            try await healthStore.requestAuthorization(
+                toShare: [workoutType],
+                read: [],
+            )
+            
+            guard healthStore.authorizationStatus(for: workoutType) == .sharingAuthorized else {
+                throw RuntimeError.authorizationDenied
+            }
+        @unknown default:
+            throw RuntimeError.authorizationDenied
+        }
+    }
+}
+
+extension WorkoutRuntimeController: HKWorkoutSessionDelegate {
+    nonisolated func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+    didChangeTo toState: HKWorkoutSessionState,
+        from fromState: HKWorkoutSessionState,
+        date: Date
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.isRunning = toState == .running
+            
+            if toState == .ended {
+                self.workoutSession = nil
+            }
+        }
+    }
+    
+    nonisolated func workoutSession(
+        _ workoutSEssion: HKWorkoutSession,
+        didFailWithError error: Error
+    ) {
+        Task { @MainActor [weak self ] in
+            self?.lastError = error.localizedDescription
+            self?.isRunning = false
+            self?.workoutSession = nil
+        }
     }
 }

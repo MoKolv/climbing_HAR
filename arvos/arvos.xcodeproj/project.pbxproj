@@ -52,6 +52,7 @@
 		3FF2D11E2EC6F75B009B34B2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		3FF2D1FB2EC6FBF2009B34B2 /* WatchSensorPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSensorPacket.swift; sourceTree = "<group>"; };
 		3FF2D1FC2EC6FBF2009B34B2 /* WatchConnectivityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchConnectivityService.swift; sourceTree = "<group>"; };
+		CDEBA3073062DA2800DDCF2C /* arvosWatchApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = arvosWatchApp.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -117,6 +118,7 @@
 		3FF2D1192EC6F75B009B34B2 /* arvosWatchApp */ = {
 			isa = PBXGroup;
 			children = (
+				CDEBA3073062DA2800DDCF2C /* arvosWatchApp.entitlements */,
 				3FF2D11A2EC6F75B009B34B2 /* arvosWatchApp.swift */,
 				3FF2D11B2EC6F75B009B34B2 /* WatchContentView.swift */,
 				3FF2D11C2EC6F75B009B34B2 /* WatchSensorService.swift */,
@@ -294,6 +296,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = arvosWatchApp/arvosWatchApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = MHM2AFNTW9;
@@ -325,6 +328,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = arvosWatchApp/arvosWatchApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = MHM2AFNTW9;

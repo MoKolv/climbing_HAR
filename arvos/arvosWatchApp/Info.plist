@@ -20,8 +20,14 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>ARVOS uses a workout session to keep synchronized motion recording active while the watch disoplay is dimmed</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>ARVOS starts a temporary climbing workout so motion recording can continue in the background. The workout is not saved.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Arvos needs motion sensor access to stream IMU data from your Apple Watch for synchronized sensor tracking.</string>
+	<key>UIBackgroundModes</key>
+	<array/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -33,5 +39,9 @@
 	<string>com.moritzkolvenbach.arvos</string>
 	<key>WKWatchOnly</key>
 	<false/>
+	<key>WKBackgroundModes</key>
+	<array>
+		<string>workout-processing</string>
+	</array>
 </dict>
 </plist>
