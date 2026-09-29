@@ -80,6 +80,9 @@ class ArvosServer:
         self.on_watch_activity = None
         self.on_watch_sync_result = None
         self.on_watch_stream_drained = None
+        self.on_watch_experiment_session_state: Optional[
+            Callable[[dict[str, Any]], Awaitable[None] | None]
+        ] = None
 
     def get_local_ip(self) -> str:
         """
@@ -435,6 +438,15 @@ class ArvosServer:
                         else:
                             print("SERVER watch_stream_drained callback completed")
 
+                        return
+
+                    case "watch_experiment_session_state":
+                        print("Server Received watch_experiment_session_state", data)
+
+                        try:
+                            await self._invoke_callback(self.on_watch_experiment_session_state, data)
+                        except Exception as exc:
+                            print("watch_experiment_session callback failed:", repr(exc))
                         return
 
         """Delegate message to appropriate handler"""

@@ -32,9 +32,19 @@ class WatchConnectivityService: NSObject, ObservableObject {
     private let liveBatchSize = 50
     private let liveFlushInterval: TimeInterval = 0.02
     private let backgroundFlushInterval: TimeInterval = 1.0
+    private let backgroundBatchSize = 250
+    private let maxBufferedSensorPackets = 15_000
     
     private var liveBatchInFlight = false
     private var sensorGeneration: UInt64 = 0
+    
+    private struct BackgroundTransferContext {
+        let generation: UInt64
+        let packets: [WatchSensorPacket]
+    }
+    
+    private var backgroundTransfers: [ObjectIdentifier: BackgroundTransferContext] = [:]
+    private var backgroundInFlightPacketCount = 0
     
     private var sensorDeliveryPaused = false
     private var pendingSensorDrainCompletions: [() -> Void] = []
@@ -43,6 +53,7 @@ class WatchConnectivityService: NSObject, ObservableObject {
     private var droppedSensorPackets = 0
     private var acknowledgedSensorPackets = 0
     private var failedLiveBatchCount = 0
+    private var failedBackgroundBatchCount = 0
     private var liveInFlightPacketCount = 0
     private var drainStartedAtNs: UInt64?
     
@@ -122,8 +133,8 @@ class WatchConnectivityService: NSObject, ObservableObject {
         updatePeakOutstandingLocked()
         
         // Limit buffer size to prevent memory issues
-        if messageQueue.count > 1000 {
-            let droppedCount = 500 // Drop oldest half
+        if messageQueue.count > maxBufferedSensorPackets {
+            let droppedCount = messageQueue.count - maxBufferedSensorPackets // Drop oldest half
             
             messageQueue.removeFirst(droppedCount)
             droppedSensorPackets += droppedCount
@@ -165,7 +176,7 @@ class WatchConnectivityService: NSObject, ObservableObject {
         sensorDeliveryPaused = false
         drainStartedAtNs = WatchTime.now()
         
-        if messageQueue.isEmpty && !liveBatchInFlight {
+        if messageQueue.isEmpty && !liveBatchInFlight, backgroundTransfers.isEmpty {
             let summary = drainSummaryLocked()
             queueLock.unlock()
             
@@ -175,7 +186,9 @@ class WatchConnectivityService: NSObject, ObservableObject {
         }
         
         pendingSensorDrainCompletions.append(completion)
-        let shouldScheduleFlush = !liveBatchInFlight
+        let shouldScheduleFlush = !messageQueue.isEmpty
+            && !liveBatchInFlight
+            && backgroundTransfers.isEmpty
         queueLock.unlock()
         
         if shouldScheduleFlush {
@@ -185,19 +198,23 @@ class WatchConnectivityService: NSObject, ObservableObject {
     
     func resetSensorTransportMetrics() {
         queueLock.lock()
+        peakOutstandingSensorPackets = messageQueue.count
+            + liveInFlightPacketCount
+            + backgroundInFlightPacketCount
         
-        peakOutstandingSensorPackets = 0
         droppedSensorPackets = 0
         acknowledgedSensorPackets = 0
         failedLiveBatchCount = 0
-        liveInFlightPacketCount = 0
+        failedBackgroundBatchCount = 0
         drainStartedAtNs = nil
         
         queueLock.unlock()
     }
     
-    private func updatePeakOutstandingLocked() {
-        let outstanding = messageQueue.count + liveInFlightPacketCount
+    func updatePeakOutstandingLocked() {
+        let outstanding = messageQueue.count
+            + liveInFlightPacketCount
+            + backgroundInFlightPacketCount
         peakOutstandingSensorPackets = max(outstanding, peakOutstandingSensorPackets)
     }
     
@@ -217,7 +234,21 @@ class WatchConnectivityService: NSObject, ObservableObject {
             dropped queue packets: \(droppedSensorPackets)
             failed live batches: \(failedLiveBatchCount)
             drain duration: \(Double(durationNs) / 1_000_000.0) ms
+            failed background batches: \(failedBackgroundBatchCount)
             """
+    }
+    
+    private func takeDrainCompletionsIfReadyLocked() -> ([() -> Void], String?) {
+        guard messageQueue.isEmpty,
+              !liveBatchInFlight,
+              backgroundTransfers.isEmpty,
+              !pendingSensorDrainCompletions.isEmpty else {
+            return ([], nil)
+        }
+        
+        let completions = pendingSensorDrainCompletions
+        pendingSensorDrainCompletions.removeAll()
+        return (completions, drainSummaryLocked())
     }
     
     func discardBufferedSensorPackers() {
@@ -239,29 +270,36 @@ class WatchConnectivityService: NSObject, ObservableObject {
     func cancelOutstandingSensorTransfers() {
         guard let session else { return }
         
-        let transfers = session.outstandingUserInfoTransfers.filter { transfer in transfer.userInfo["packets"] != nil
-        }
+        let transfers = session.outstandingUserInfoTransfers.filter { transfer in transfer.userInfo["packets"] != nil}
         
         transfers.forEach { $0.cancel() }
+        
+        queueLock.lock()
+        for transfer in transfers {
+            if let context = backgroundTransfers.removeValue(
+                forKey: ObjectIdentifier(transfer)
+            ) {
+                backgroundInFlightPacketCount = max(0, backgroundInFlightPacketCount - context.packets.count)
+            }
+        }
+        queueLock.unlock()
         print("Cancelled \(transfers.count) outstanding transfers")
     }
     
     private func scheduleFlush() {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
             guard self.flushTimer == nil else { return }
             
             let interval = self.session?.isReachable == true
-                ? self.liveFlushInterval
-                : self.backgroundFlushInterval
+            ? self.liveFlushInterval
+            : self.backgroundFlushInterval
             
-            self.flushTimer = Timer.scheduledTimer(
-                withTimeInterval: interval,
-                repeats: false
-            ) { [weak self] _ in
+            self.flushTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) {
+                [weak self] _ in
                 self?.flushBuffer()
             }
         }
-        
     }
     
     private func flushBuffer() {
@@ -281,20 +319,18 @@ class WatchConnectivityService: NSObject, ObservableObject {
             return
         }
         
-        if !useLiveMessage && !pendingSensorDrainCompletions.isEmpty {
-            queueLock.unlock()
-            scheduleFlush()
-            return
-        }
-        
         if useLiveMessage && liveBatchInFlight {
             queueLock.unlock()
             return
         }
         
-        let batchCount = useLiveMessage
-        ? min(liveBatchSize, messageQueue.count)
-        : messageQueue.count
+        if !useLiveMessage && !backgroundTransfers.isEmpty {
+            queueLock.unlock()
+            return
+        }
+        
+        let maximumBatchSize = useLiveMessage ? liveBatchSize : backgroundBatchSize
+        let batchCount = min(maximumBatchSize, messageQueue.count)
         
         guard batchCount > 0 else {
             queueLock.unlock()
@@ -303,21 +339,19 @@ class WatchConnectivityService: NSObject, ObservableObject {
         
         let packetsToSend = Array(messageQueue.prefix(batchCount))
         messageQueue.removeFirst(batchCount)
-        
-        let hasMore = !messageQueue.isEmpty
         let generation = sensorGeneration
         
         if useLiveMessage {
+            liveBatchInFlight = true
             liveInFlightPacketCount = packetsToSend.count
             updatePeakOutstandingLocked()
         }
         
         queueLock.unlock()
         
-        // Use transferUserInfo for background delivery
         do {
             let encoded = try JSONEncoder().encode(packetsToSend)
-            let message: [String: Any] = [
+            let message : [String: Any] = [
                 "packets": encoded,
                 "count": packetsToSend.count
             ]
@@ -326,30 +360,33 @@ class WatchConnectivityService: NSObject, ObservableObject {
                 session.sendMessage(
                     message,
                     replyHandler: { [weak self] _ in
-                        DispatchQueue.main.async {
-                            self?.finishLiveBatch(generation: generation)
-                        }
+                        self?.finishLiveBatch(generation: generation)
                     },
                     errorHandler: { [weak self] _ in
-                        DispatchQueue.main.async {
-                            self?.finishLiveBatch(
-                                generation: generation,
-                                failedPackets: packetsToSend
-                            )
-                        }
+                        self?.finishLiveBatch(
+                            generation: generation,
+                            failedPackets: packetsToSend
+                        )
                     }
                 )
             } else {
-                session.transferUserInfo(message)
+                let transfer = session.transferUserInfo(message)
+                queueLock.lock()
+                backgroundTransfers[ObjectIdentifier(transfer)] = BackgroundTransferContext(
+                    generation: generation,
+                    packets: packetsToSend
+                )
+                
+                backgroundInFlightPacketCount += packetsToSend.count
+                updatePeakOutstandingLocked()
+                queueLock.unlock()
             }
             
-            updateSendStatistics(messages: packetsToSend.count, bytes: Int64(encoded.count))
-            
-            if hasMore && !useLiveMessage {
-                scheduleFlush()
-            }
+            updateSendStatistics(
+                messages: packetsToSend.count,
+                bytes: Int64(encoded.count)
+            )
         } catch {
-            // Re-buffer the packets
             queueLock.lock()
             
             if useLiveMessage {
@@ -390,18 +427,7 @@ class WatchConnectivityService: NSObject, ObservableObject {
         }
         
         let shouldFlushAgain = !messageQueue.isEmpty && !sensorDeliveryPaused
-        let drainCompletions: [() -> Void]
-        let drainSummary: String?
-        
-        if messageQueue.isEmpty && !liveBatchInFlight && !pendingSensorDrainCompletions.isEmpty {
-            drainCompletions = pendingSensorDrainCompletions
-            pendingSensorDrainCompletions.removeAll()
-            drainSummary = drainSummaryLocked()
-        } else {
-            drainCompletions = []
-            drainSummary = nil
-        }
-        
+        let (drainCompletions, drainSummary) = takeDrainCompletionsIfReadyLocked()
         queueLock.unlock()
         
         if shouldFlushAgain {
@@ -412,7 +438,43 @@ class WatchConnectivityService: NSObject, ObservableObject {
             print("Drained:", drainSummary)
         }
         
-        for completion in drainCompletions {
+        drainCompletions.forEach { completion in
+            DispatchQueue.main.async(execute: completion)
+        }
+    }
+    
+    private func finishBackgroundTransfer(_ transfer: WCSessionUserInfoTransfer, error: Error?) {
+        queueLock.lock()
+        
+        guard let context = backgroundTransfers.removeValue(forKey: ObjectIdentifier(transfer)) else {
+            queueLock.unlock()
+            return
+        }
+        
+        backgroundInFlightPacketCount = max(0, backgroundInFlightPacketCount - context.packets.count)
+        
+        if error == nil {
+            acknowledgedSensorPackets += context.packets.count
+        } else {
+            failedBackgroundBatchCount += 1
+            if context.generation == sensorGeneration {
+                messageQueue.insert(contentsOf: context.packets, at: 0)
+            }
+        }
+        
+        let shouldFlushAgain = !messageQueue.isEmpty && !sensorDeliveryPaused
+        let (drainCompletions, drainSummary) = takeDrainCompletionsIfReadyLocked()
+        queueLock.unlock()
+        
+        if shouldFlushAgain {
+            scheduleFlush()
+        }
+        
+        if let drainSummary {
+            print("Drained:", drainSummary)
+        }
+        
+        drainCompletions.forEach { completion in
             DispatchQueue.main.async(execute: completion)
         }
     }
@@ -560,6 +622,10 @@ extension WatchConnectivityService: WCSessionDelegate {
         }
         
       
+    }
+    
+    func session(_ session: WCSession, didFinish userInfoTransfer: WCSessionUserInfoTransfer, error: Error?) {
+        finishBackgroundTransfer(userInfoTransfer, error: error)
     }
     
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any] = [:]) {

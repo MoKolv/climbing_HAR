@@ -131,10 +131,16 @@ struct WatchSyncResultMessage: Codable {
     }
 }
 
-struct WatchStreamDrainMessage: Codable {
+struct WatchStreamDrainMessage: Encodable {
     let type = "watch_stream_drained"
     let timestampNs = Constants.Time.now()
     let capturedSampleCount: UInt64
+}
+
+struct WatchExperimentSessionStateMessage: Encodable {
+    let type = "watch_experiment_session_state"
+    let timestamp = Constants.Time.now()
+    let state: String
 }
 
 // MARK: - Control Messages

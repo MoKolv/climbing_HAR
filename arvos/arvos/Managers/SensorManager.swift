@@ -216,11 +216,13 @@ class SensorManager: ObservableObject {
 
             // Configure and start Watch sensors
             if config.watchEnabled {
-                if watchSensorManager.isWatchConnected {
+                if watchSensorManager.isWatchConnected,
+                   watchSensorManager.isWatchReachable {
                     watchSensorManager.startWatchStreaming(hz: config.watchHz)
                     sensorStatuses.watch = .active
                 } else {
                     sensorStatuses.watch = .inactive
+                    print("Watch start skipped: synchronized live link unavailable")
                 }
             }
 

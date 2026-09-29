@@ -64,10 +64,21 @@ class WatchSensorService: ObservableObject {
         setupMotionManager()
         setupCommandObserver()
         
-        workoutRuntime.$isRunning
+        workoutRuntime.$state
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] isRunning in
-                self?.isBackgroundRuntimeActive = isRunning
+            .sink {[weak self] state in
+                guard let self else { return }
+                
+                self.isBackgroundRuntimeActive = state == .running
+                
+                switch state {
+                case .running:
+                    self.sendExperimentSessionState("running")
+                case .ended:
+                    self.sendExperimentSessionState("ended")
+                default:
+                    break
+                }
             }
             .store(in: &cancellables)
         
@@ -136,28 +147,18 @@ class WatchSensorService: ObservableObject {
             let hz = parseHz(from: parameters, defaultHz: 50)
             updateFrequency(hz)
             
+        case "start_experiment_session":
+            startExperimentSession()
+            
+        case "end_experiment_session":
+            endExperimentSession()
+            
         case "pause_sensor_transmission":
             let preserveBuffer =
             (parameters["preserve_buffer"] as? Bool)
             ?? (parameters["preserveBuffer"] as? NSNumber)?.boolValue
             ?? false
-            
-            if !preserveBuffer {
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    
-                    do {
-                        try await self.workoutRuntime.start()
-                    } catch {
-                        self.backgroundRuntimeError = error.localizedDescription
-                        self.connectivityService.sendCommand(
-                            "watch_runtime_error",
-                            parameters: ["dtails": error.localizedDescription]
-                        )
-                    }
-                    
-                }
-            }
+    
             
             sensorTransmissionPaused = true
             resumeCaptureAfterSyncPause = isStreaming && isMotionCaptureRunning
@@ -315,7 +316,6 @@ class WatchSensorService: ObservableObject {
             )
             
             // Keep background execution alive until every queued sensor batch has finished
-            self.workoutRuntime.stop()
             print("Watch sensor queue drained: \(capturedSampleCount) motion samples")
         }
         
@@ -450,6 +450,41 @@ class WatchSensorService: ObservableObject {
         }
     }
     
+    private func startExperimentSession() {
+        if workoutRuntime.isRunning {
+            sendExperimentSessionState("running")
+            return
+        }
+        
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            
+            do {
+                try await self.workoutRuntime.start()
+            } catch {
+                self.backgroundRuntimeError = error.localizedDescription
+                self.connectivityService.sendCommand("watch_runtime_error", parameters: ["details": error.localizedDescription])
+            }
+        }
+    }
+    
+    private func endExperimentSession() {
+        guard !isStreaming else {
+            connectivityService.sendCommand("watch_runtime_error", parameters: ["details": "Cannot end the workout session while IMU capture is active"])
+            return
+        }
+        
+        if workoutRuntime.state == .notStarted || workoutRuntime.state == .ended {
+            sendExperimentSessionState("ended")
+            return
+        }
+        workoutRuntime.stop()
+    }
+    
+    private func sendExperimentSessionState(_ state: String) {
+        connectivityService.sendCommand("watch_experiment_session_state", parameters: ["state": state])
+    }
+    
     func prepareBackgroundRuntime() async {
         await workoutRuntime.prepareAuthorization()
     }
@@ -480,6 +515,7 @@ final class WorkoutRuntimeController: NSObject, ObservableObject {
         }
     }
     
+    @Published private(set) var state: HKWorkoutSessionState = .notStarted
     @Published private(set) var isRunning = false
     @Published private(set) var lastError: String?
     
@@ -517,8 +553,15 @@ final class WorkoutRuntimeController: NSObject, ObservableObject {
     }
     
     func stop() {
-        workoutSession?.end()
+        guard let workoutSession else {
+            isRunning = false
+            state = .ended
+            return
+        }
+        
+        workoutSession.end()
     }
+    
     
     private func authorizeIfNeeded() async throws {
         guard HKHealthStore.isHealthDataAvailable() else {
@@ -554,6 +597,10 @@ extension WorkoutRuntimeController: HKWorkoutSessionDelegate {
     ) {
         Task { @MainActor [weak self] in
             guard let self else { return }
+            
+            print("Workout session state:", fromState.rawValue, "->", toState.rawValue)
+            
+            self.state = toState
             self.isRunning = toState == .running
             
             if toState == .ended {
@@ -567,9 +614,14 @@ extension WorkoutRuntimeController: HKWorkoutSessionDelegate {
         didFailWithError error: Error
     ) {
         Task { @MainActor [weak self ] in
-            self?.lastError = error.localizedDescription
-            self?.isRunning = false
-            self?.workoutSession = nil
+            guard let self else { return }
+            
+            print("Workout session failed:", error.localizedDescription)
+            
+            self.lastError = error.localizedDescription
+            self.isRunning = false
+            self.state = .ended
+            self.workoutSession = nil
         }
     }
 }

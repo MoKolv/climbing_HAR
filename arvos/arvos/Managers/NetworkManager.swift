@@ -542,6 +542,14 @@ class NetworkManager: ObservableObject {
         }
     }
     
+    func sendWatchExperimentSessionState(_ state: String) {
+        do {
+            try sendJSON(WatchExperimentSessionStateMessage(state: state))
+        } catch {
+            print("Failed to send watch experiment-session state:", error)
+        }
+    }
+    
     
     private func handleIncomingServerMessage(_ message: String) {
         print ("RAW SERVER MESSAGE:", message)
@@ -708,6 +716,16 @@ extension NetworkManager: WebSocketServiceDelegate {
         case "stop_recording":
             // Notify app to stop recording
             NotificationCenter.default.post(name: .stopRecording, object: nil)
+            
+        case "start_watch_experiment_session":
+            DispatchQueue.main.async {
+                WatchSensorManager.shared.startExperimentSession()
+            }
+            
+        case "end_watch_experiment_session":
+            DispatchQueue.main.async {
+                WatchSensorManager.shared.endExperimentSession()
+            }
             
         case "prepare_trial_sync":
             print("Pre trial sync request")

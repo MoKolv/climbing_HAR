@@ -45,6 +45,7 @@ async def main() -> None:
     pre_sync_event = asyncio.Event()
     post_sync_event = asyncio.Event()
     watch_drain_event = asyncio.Event()
+    watch_experiment_session_event = asyncio.Event()
     phone_sync_events = {"pre": asyncio.Event(), "post": asyncio.Event()}
     video_armed_event = asyncio.Event()
     video_capture_stopped_event = asyncio.Event()
@@ -63,6 +64,7 @@ async def main() -> None:
     debug_mode = False
     active_trial_roles: set [str] = set()
     active_watch_expected = False
+    watch_experiment_session_state = "inactive"
 
     def select_trial_roles() -> set[str] | None:
         missing_roles = server.missing_roles(REQUIRED_ROLES)
@@ -172,6 +174,39 @@ async def main() -> None:
         print("\n🚫 Stopping program")
         stop_event.set()
 
+    async def ensure_watch_experiment_session() -> bool:
+        nonlocal watch_experiment_session_state
+
+        if watch_experiment_session_state == "running":
+            return True
+
+        if not server.has_role(IMU_WATCH_ROLE):
+            print("Cannot start watch workout session: IMU phone is not connected")
+            return False
+
+        watch_experiment_session_event.clear()
+        watch_experiment_session_state = "starting"
+
+        await server.send_command_to_role(IMU_WATCH_ROLE, "start_watch_experiment_session")
+
+        try:
+            await asyncio.wait_for(
+                watch_experiment_session_event.wait(),
+                timeout= 15.0,
+            )
+        except asyncio.TimeoutError:
+            watch_experiment_session_state = "unknown"
+            print("Timed out waiting for the watch workout session to start")
+            return False
+
+        if watch_experiment_session_state != "running":
+            print("Watch workout session did not start; state:", watch_experiment_session_state)
+            return False
+
+        print("Watch workout session started")
+        return True
+
+
     async def _start_stop_recording(_: PromptInput) -> None:
         nonlocal pre_sync_result, post_sync_result, watch_drain_result
         nonlocal active_trial, active_reservation, active_upload_token
@@ -192,6 +227,9 @@ async def main() -> None:
             has_imu = IMU_WATCH_ROLE in active_trial_roles
             has_video = VIDEO_ROLE in active_trial_roles
 
+            if has_imu and not await ensure_watch_experiment_session():
+                active_trial_roles.clear()
+                return
 
             try:
                 active_reservation = metadata_store.begin_trial(
@@ -625,6 +663,32 @@ async def main() -> None:
             else "❌ OFF - both phone roles required"
         )
 
+    async def end_watch_experiment_session(_: PromptInput) -> None:
+        nonlocal watch_experiment_session_state
+
+        if state.recording or active_trial is not None:
+            print("Cannot end the watch workout session while a trial is active")
+
+        if not server.has_role(IMU_WATCH_ROLE):
+            print("Cannot end watch workout session while IMU phone is not connected")
+
+        watch_experiment_session_event.clear()
+        watch_experiment_session_state = "ending"
+
+        await server.send_command_to_role(IMU_WATCH_ROLE, "end_watch_experiment_session")
+
+        try:
+            await asyncio.wait_for(watch_experiment_session_event.wait(), timeout=15.0)
+        except asyncio.TimeoutError:
+            watch_experiment_session_state = "unknown"
+            print("Timed out watiting for the watch workout session to end")
+            return
+
+        if watch_experiment_session_state == "ended":
+            print("Watch workout session ended")
+        else:
+            print("Watch workout session end failed; state:", watch_experiment_session_state)
+
     async def status(_: PromptInput) -> None:
         def connection_message(device: str, connected: bool) -> str:
             return (
@@ -643,6 +707,7 @@ async def main() -> None:
         print(connection_message("IMU_Phone", state.imu_phone_connected))
         print(connection_message("VIDEO_Phone", state.video_phone_connected))
         print(connection_message("Watch", state.watch_connected))
+        print("Watch workout session:", watch_experiment_session_state)
 
         print(recording_message(state.recording))
         print("Participant ID:", state.participant_id or 'not set')
@@ -725,6 +790,7 @@ async def main() -> None:
         print(f"Client disconnected: {client_id}")
 
     async def on_error(error: str, details: str | None) -> None:
+        nonlocal watch_experiment_session_state
         print(f"Phone error: {error}")
 
         if details: print(details)
@@ -733,6 +799,13 @@ async def main() -> None:
             pre_sync_event.set()
         elif error == "post_sync_failed":
             post_sync_event.set()
+        elif error in {
+            "watch_runtime_error",
+            "watch_experiment_session_start_failed",
+            "watch_experiment_session_end_failed",
+        }:
+            watch_experiment_session_state = "error"
+            watch_experiment_session_event.set()
 
     async def on_watch_sync_result(data: dict) -> None:
         nonlocal pre_sync_result, post_sync_result
@@ -752,6 +825,18 @@ async def main() -> None:
         nonlocal watch_drain_result
         watch_drain_result = data
         watch_drain_event.set()
+
+    async def on_watch_experiment_session_state(data: dict) -> None:
+        nonlocal watch_experiment_session_state
+
+        reported_state = data.get("state")
+
+        if reported_state not in {"running", "ended"}:
+            print("Ignoring invalid watch experiment-session state:", data)
+            return
+
+        watch_experiment_session_state = reported_state
+        watch_experiment_session_event.set()
 
     async def on_phone_clock_sync_result(role: str, data: dict) -> None:
         phase = data["phase"]
@@ -779,6 +864,7 @@ async def main() -> None:
     server.on_disconnect = on_disconnect
     server.on_watch_sync_result = on_watch_sync_result
     server.on_watch_stream_drained = on_watch_stream_drained
+    server.on_watch_experiment_session_state = on_watch_experiment_session_state
     server.on_error = on_error
     server.on_client_role = on_client_role
     server.on_client_role_disconnect = on_client_role_disconnect
@@ -793,6 +879,7 @@ async def main() -> None:
         "d": toggle_debug_mode,
         "p": set_participant_id,
         "b": set_boulder_id,
+        "e": end_watch_experiment_session,
     }
 
     await upload_server.start()
@@ -805,6 +892,15 @@ async def main() -> None:
     finally:
         if active_trial is not None:
             await fail_active_trial("program_stopped")
+
+        if watch_experiment_session_state == "running" and server.has_role(IMU_WATCH_ROLE):
+            watch_experiment_session_event.clear()
+
+            try:
+                await server.send_command_to_role(IMU_WATCH_ROLE, "end_watch_experiment_session")
+                await asyncio.wait_for(watch_experiment_session_event.wait(), timeout=5.0)
+            except Exception as error:
+                print("Could not end watch workout session during shutdown:", repr(error))
 
         keyboard_task.cancel()
         server_task.cancel()

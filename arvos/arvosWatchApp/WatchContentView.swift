@@ -17,14 +17,27 @@ struct WatchContentView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     // Connection status
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(connectivityService.isPhoneReachable ? Color.green : Color.red)
-                            .frame(width: 6, height: 6)
-                        Text(connectivityService.isPhoneReachable ? "Connected" : "Disconnected")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                    VStack(spacing: 4) {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(connectivityService.isPhoneReachable ? Color.green : Color.orange)
+                                .frame(width: 6, height: 6)
+                            Text(connectivityService.isPhoneReachable ? "Live link" : "Queued delivery")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(sensorService.isBackgroundRuntimeActive ? Color.green : Color.gray)
+                                .frame(width: 6, height: 6)
+                            Text(sensorService.isBackgroundRuntimeActive ? "Background active" : "Background idle")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            
+                        }
                     }
+                    
                     .padding(.top, 4)
 
                     // Streaming control
@@ -75,6 +88,9 @@ struct WatchContentView: View {
                 .padding(.horizontal, 8)
             }
             .navigationTitle("ARVOS")
+        }
+        .task {
+            await sensorService.prepareBackgroundRuntime()
         }
     }
     

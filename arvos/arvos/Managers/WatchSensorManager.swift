@@ -32,6 +32,7 @@ class WatchSensorManager: ObservableObject {
     static let shared = WatchSensorManager()
     
     @Published private(set) var isWatchConnected = false
+    @Published private(set) var isWatchReachable = false
     @Published private(set) var isWatchStreaming = false
     @Published private(set) var watchSampleCount: Int = 0
     @Published private(set) var watchHz: Double = 0
@@ -106,14 +107,18 @@ class WatchSensorManager: ObservableObject {
     
     private func setupObservers() {
         // Observe watch reachability
-        connectivityService.$isWatchReachable
-            .sink { [weak self] isReachable in
-                self?.isWatchConnected = isReachable
-                if !isReachable {
-                    self?.isWatchStreaming = false
-                }
-            }
-            .store(in: &cancellables)
+        Publishers.CombineLatest3(
+            connectivityService.$isPaired,
+            connectivityService.$isWatchAppInstalled,
+            connectivityService.$isWatchReachable
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] values in
+            let (isPaired, isInstalled, isReachable) = values
+            self?.isWatchConnected = isPaired && isInstalled
+            self?.isWatchReachable = isReachable
+        }
+        .store(in: &cancellables)
         
         NotificationCenter.default.addObserver(
             forName: .watchCommandReceived,
@@ -122,19 +127,62 @@ class WatchSensorManager: ObservableObject {
         ) { notification in
             guard
                 let command = notification.userInfo?["command"] as? String,
-                command == "watch_stream_drained",
-                let parameters = notification.userInfo?["parameters"] as? [String: Any],
-                let count = parameters["captured_sample_count"] as? NSNumber
-            else { return }
-            NetworkManager.shared.sendWatchStreamDrained(capturedSampleCount: count.uint64Value)
+                let parameters = notification.userInfo?["parameters"] as? [String: Any]
+            else {
+                return
+            }
+            
+            switch command {
+            case "watch_stream_drained":
+                guard let count = parameters["captured_sample_count"] as? NSNumber else { return }
+                NetworkManager.shared.sendWatchStreamDrained(capturedSampleCount: count.uint64Value)
+                
+            case "watch_experiment_session_state":
+                guard let state = parameters["state"] as? String else { return }
+                NetworkManager.shared.sendWatchExperimentSessionState(state)
+                
+            case "watch_runtime_error":
+                let details = parameters["details"] as? String
+                NetworkManager.shared.sendError("watch_runtime_error", details: details)
+                
+            default:
+                break
+            }
         }
     }
     
     // MARK: - Control
     
+    func startExperimentSession() {
+        guard isWatchConnected else {
+            NetworkManager.shared.sendError("watch_experiment_session_start_failed", details: "Watch is not paired or the watch app is not installed")
+            return
+        }
+        
+        guard isWatchReachable else {
+            NetworkManager.shared.sendError("watch_experiment_session_start_failed", details: "The live watch link is unavailable")
+            return
+        }
+        
+        connectivityService.sendCommand("start_experiment_session")
+    }
+    
+    func endExperimentSession() {
+        guard !isWatchStreaming, !isTrialSyncinProgress else {
+            NetworkManager.shared.sendError("watch_experiment_session_end_failed", details: "A watch trial or synchronization is still active")
+            return
+        }
+        connectivityService.sendCommand("end_experiment_session")
+    }
+    
     func startWatchStreaming(hz: Int = 50) {
         guard isWatchConnected else {
-            print("⚠️ Watch not connected")
+            print("Watch is not paired or the wawtch app is not installed")
+            return
+        }
+        
+        guard isWatchReachable else {
+            print("Watch live link is unavailable; synchronized start was not sent")
             return
         }
         
@@ -593,12 +641,8 @@ extension WatchSensorManager: WatchConnectivityDelegate {
     
     func watchConnectivity(_ service: WatchConnectivityService, didChangeReachability isReachable: Bool) {
         DispatchQueue.main.async {
-            self.isWatchConnected = isReachable
-            
-            if !isReachable {
-                self.isWatchStreaming = false
-                self.watchHz = 0
-            }
+            self.isWatchReachable = isReachable
+           
         }
     }
 }
