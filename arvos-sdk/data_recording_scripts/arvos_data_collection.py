@@ -17,9 +17,13 @@ from arvos import (
     WatchMotionActivityData,
 )
 from participant_metadata import ParticipantMetadataStore, TrialReservation
+from participant_profile import ParticipantProfile
 from recording_state import RecordingState
 from terminal_controls import PromptInput, listen_for_keys
 from trial_output import TrialOutput
+
+# Experiment settings
+TRIALS_PER_PARTICIPANT = 4
 
 async def main() -> None:
     project_root = Path(__file__).resolve().parents[2]
@@ -104,6 +108,31 @@ async def main() -> None:
 
         print(f"Missing roles: {missing_text}")
         return connected_roles
+
+    async def confirm_yes_no(prompt_input: PromptInput, question: str) -> bool:
+        while True:
+            answer = (await prompt_input(f"{question} [y/n]")).lower()
+            if answer == "y":
+                return True
+            if answer == "n":
+                return False
+            print("Confirm or cancel with [y/n]")
+
+    async def collect_missing_participant_fields(participant_id: str, prompt_input: PromptInput) -> None:
+        metadata = metadata_store.load(participant_id)
+        profile = ParticipantProfile(metadata.get("participant", {}))
+
+        for field in profile.missing_fields():
+            while True:
+                answer = await prompt_input(f"{field.label}: ")
+                try:
+                    value = profile.set_answer(field, answer)
+                except ValueError as error:
+                    print(error)
+                    continue
+
+                metadata_store.update_participant(participant_id, {field.key: value})
+                break
 
     async def fail_active_trial(reason: str) -> None:
         nonlocal active_trial, active_reservation, active_upload_token
@@ -207,7 +236,7 @@ async def main() -> None:
         return True
 
 
-    async def _start_stop_recording(_: PromptInput) -> None:
+    async def _start_stop_recording(prompt_input: PromptInput) -> None:
         nonlocal pre_sync_result, post_sync_result, watch_drain_result
         nonlocal active_trial, active_reservation, active_upload_token
         nonlocal active_trial_roles, active_watch_expected
@@ -220,6 +249,21 @@ async def main() -> None:
             selected_roles = select_trial_roles()
             if selected_roles is None:
                 return
+
+            if not debug_mode:
+                await collect_missing_participant_fields(state.participant_id, prompt_input)
+                next_trial = metadata_store.next_trial_number(state.participant_id)
+
+                if next_trial > TRIALS_PER_PARTICIPANT:
+                    confirmed = await confirm_yes_no(
+                        prompt_input,
+                        f"Trial {next_trial} exceeds the target of "
+                        f"{TRIALS_PER_PARTICIPANT} for participant "
+                        f"{state.participant_id}. Start it anyway?",
+                    )
+                    if not confirmed:
+                        print("Trial start cancelled.")
+                        return
 
             active_trial_roles = selected_roles
             active_watch_expected = False
@@ -627,14 +671,32 @@ async def main() -> None:
             print("❌ Cannot change participant while a trial is active")
             return
 
-        requested_id = await prompt_input("\nParticipant ID: ")#
+        requested_id = await prompt_input("\nParticipant ID: ")
 
         try:
             participant_id = metadata_store.validate_participant_id(requested_id)
-            directory = metadata_store.ensure_participant(participant_id)
         except ValueError as error:
             print(f"❌ Invalid participant ID: {error}")
             return
+
+        previous_id = state.participant_id
+
+        if not debug_mode and previous_id is not None and previous_id != participant_id:
+            completed = metadata_store.completed_trial_count(previous_id)
+            if completed < TRIALS_PER_PARTICIPANT:
+                confirmed = await confirm_yes_no(
+                    prompt_input,
+                    f"Participant {previous_id} has {completed}/"
+                    f"{TRIALS_PER_PARTICIPANT} completed trials. "
+                    f"Switch to {participant_id} anyway?",
+                )
+                if not confirmed:
+                    print("Participant unchanged.")
+                    return
+
+        directory = metadata_store.ensure_participant(participant_id)
+        if not debug_mode:
+            await collect_missing_participant_fields(participant_id, prompt_input)
 
         state.participant_id = participant_id
         print(f"✅ Participant selected: {directory}")
@@ -681,7 +743,7 @@ async def main() -> None:
             await asyncio.wait_for(watch_experiment_session_event.wait(), timeout=15.0)
         except asyncio.TimeoutError:
             watch_experiment_session_state = "unknown"
-            print("Timed out watiting for the watch workout session to end")
+            print("Timed out waiting for the watch workout session to end")
             return
 
         if watch_experiment_session_state == "ended":
@@ -711,6 +773,12 @@ async def main() -> None:
 
         print(recording_message(state.recording))
         print("Participant ID:", state.participant_id or 'not set')
+        if state.participant_id:
+            completed = metadata_store.completed_trial_count(state.participant_id)
+            next_trial = metadata_store.next_trial_number(state.participant_id)
+            print(f"Completed trials: {completed} / {TRIALS_PER_PARTICIPANT}")
+            print(f"Next trial number:", next_trial)
+
         print("Boulder ID:", state.boulder_id or 'not set')
         print(
             "Trial directory:",

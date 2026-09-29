@@ -75,22 +75,32 @@ class ParticipantMetadataStore:
         metadata["participant"].update(fields)
         self._write(participant_id, metadata)
 
+    def completed_trial_count(self, participant_id: str) -> int:
+        metadata = self.load(participant_id)
+        return sum(trial.get("status") == "complete" for trial in metadata.get("trials", []))
+
+    def next_trial_number(self, participant_id: str) -> int:
+        metadata = self.load(participant_id)
+        participant_directory = self.participant_directory(participant_id)
+
+        trial_number = max(
+            (int(trial["trial_number"]) for trial in metadata.get("trials", [])),
+            default=0,
+        ) + 1
+
+        # Don't overwrite directory from interrupted trial
+        while (participant_directory / f"trial_{trial_number:03d}").exists():
+            trial_number += 1
+
+        return trial_number
+
     def begin_trial(self, participant_id: str, boulder_id: str | None) -> TrialReservation:
         participant_id = self.validate_participant_id(participant_id)
         participant_directory = self.participant_directory(participant_id)
         metadata = self.load(participant_id)
 
-        trial_numbers = [
-            int(trial["trial_number"])
-            for trial in metadata["trials"]
-        ]
-        trial_number = max(trial_numbers, default=0) + 1
+        trial_number = self.next_trial_number(participant_id)
         trial_directory = participant_directory / f"trial_{trial_number:03d}"
-
-        #don't overwrite existing directories
-        while trial_directory.exists():
-            trial_number += 1
-            trial_directory = participant_directory / f"trial_{trial_number:03d}"
 
         trial_directory.mkdir(parents=True)
         started_at = now_iso()
