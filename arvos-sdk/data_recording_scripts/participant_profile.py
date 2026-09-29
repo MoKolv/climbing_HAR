@@ -22,6 +22,11 @@ class ParticipantProfile:
         ParticipantField("height", "Height (cm)", float, minimum = 1),
         ParticipantField("weight", "Weight (kg)", float, minimum = 1),
         ParticipantField("wingspan", "Wingspan (cm)", float, minimum = 1),
+        ParticipantField("handedness", "Handedness (left/right)", str),
+        ParticipantField("climbing_experience", "Climbing experience (years)", int, minimum = 1),
+        ParticipantField("climbing_frequency", "Climbing frequency (times/week)", int, minimum = 1),
+        ParticipantField("climbing_competence", "Climbing competence (highest achieved grade)", str),
+
     )
 
     def __init__(self,values: Mapping[str, Any] | None = None) -> None:

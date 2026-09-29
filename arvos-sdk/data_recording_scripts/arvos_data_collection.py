@@ -242,7 +242,8 @@ async def main() -> None:
         nonlocal active_trial_roles, active_watch_expected
 
         if not state.recording:
-            if not state.participant_id:
+            participant_id = state.participant_id
+            if not participant_id:
                 print("Set a participant_id with 'p' before starting a trial")
                 return
 
@@ -251,15 +252,15 @@ async def main() -> None:
                 return
 
             if not debug_mode:
-                await collect_missing_participant_fields(state.participant_id, prompt_input)
-                next_trial = metadata_store.next_trial_number(state.participant_id)
+                await collect_missing_participant_fields(participant_id, prompt_input)
+                next_trial = metadata_store.next_trial_number(participant_id)
 
                 if next_trial > TRIALS_PER_PARTICIPANT:
                     confirmed = await confirm_yes_no(
                         prompt_input,
                         f"Trial {next_trial} exceeds the target of "
                         f"{TRIALS_PER_PARTICIPANT} for participant "
-                        f"{state.participant_id}. Start it anyway?",
+                        f"{participant_id}. Start it anyway?",
                     )
                     if not confirmed:
                         print("Trial start cancelled.")
@@ -277,7 +278,7 @@ async def main() -> None:
 
             try:
                 active_reservation = metadata_store.begin_trial(
-                    state.participant_id,
+                    participant_id,
                     state.boulder_id,
                 )
 
