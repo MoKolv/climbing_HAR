@@ -24,6 +24,8 @@ from trial_output import TrialOutput
 
 # Experiment settings
 TRIALS_PER_PARTICIPANT = 4
+RPE_MIN = 0
+RPE_MAX = 10
 
 async def main() -> None:
     project_root = Path(__file__).resolve().parents[2]
@@ -133,6 +135,30 @@ async def main() -> None:
 
                 metadata_store.update_participant(participant_id, {field.key: value})
                 break
+    async def prompt_trial_rpe(
+            prompt_input: PromptInput,
+            boulder_id: str | None,
+    ) -> int | None:
+        subject = f"boulder {boulder_id}" if boulder_id else "this trial"
+
+        while True:
+            answer = await prompt_input(
+                f"RPE for {subject} ({RPE_MIN} - {RPE_MAX}, Enter to skip): ",
+            )
+
+            if not answer:
+                return None
+
+            try:
+                rpe = int(answer)
+            except ValueError:
+                print("Enter a whole number, or press Enter to skip")
+                continue
+
+            if RPE_MIN <= rpe <= RPE_MAX:
+                return rpe
+
+            print(f"RPE Must be between{RPE_MIN} and {RPE_MAX}.")
 
     async def fail_active_trial(reason: str) -> None:
         nonlocal active_trial, active_reservation, active_upload_token
@@ -563,8 +589,10 @@ async def main() -> None:
         else:
             staging_stop_ns = stop_at_server_ns
 
+        upload_token = active_upload_token if has_video else None
+
         if has_video:
-            if active_upload_token is None:
+            if upload_token is None:
                 raise RuntimeError("Video trial has no upload token")
 
             await server.send_command_to_role(
@@ -572,11 +600,23 @@ async def main() -> None:
                 "finalize_video_recording",
             )
 
+        rpe = await prompt_trial_rpe(prompt_input, state.boulder_id)
+
+        reservation = active_reservation
+        if reservation is None:
+            raise RuntimeError("Trial has no metadata reservation")
+
+        metadata_store.set_trial_rpe(
+            reservation,
+            rpe,
+            f"{RPE_MIN} - {RPE_MAX}",
+        )
+        if upload_token is not None:
             await upload_server.wait_for_trial_files(
-                active_upload_token,
+                upload_token,
                 timeout = 300.0,
             )
-
+            
         summary = active_trial.finalize(staging_stop_ns)
 
         summary["debug_mode"] = debug_mode

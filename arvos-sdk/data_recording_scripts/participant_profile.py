@@ -58,5 +58,5 @@ class ParticipantProfile:
             if value < field.minimum:
                 raise ValueError(f"{field.label} must be at least {field.minimum}")
 
-            self.values[field.key] = value
-            return value
+        self.values[field.key] = value
+        return value

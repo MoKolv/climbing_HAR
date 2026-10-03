@@ -125,6 +125,18 @@ class ParticipantMetadataStore:
             started_at=started_at,
         )
 
+    def set_trial_rpe(
+            self,
+            reservation: TrialReservation,
+            rpe: int | None,
+            scale: str,
+    ) -> None:
+        metadata = self.load(reservation.participant_id)
+        trial = self._find_trial(metadata, reservation.trial_number)
+        trial["rpe"] = rpe
+        trial["rpe_scale"] = scale
+        self._write(reservation.participant_id, metadata)
+
     def mark_trial_complete(
             self,
             reservation: TrialReservation,
