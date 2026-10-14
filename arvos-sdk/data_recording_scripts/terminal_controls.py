@@ -13,21 +13,29 @@ PromptInput = Callable[[str], Awaitable[str]]
 KeyHandler = Callable[[PromptInput], Awaitable[None] | None]
 TimedKeyHandler = Callable[[int], Awaitable[None] | None]
 
-async def listen_for_keys(key_handlers: dict[str, KeyHandler], stop_event: asyncio.Event, timed_key_handlers: dict[str, TimedKeyHandler] | None = None) -> None:
+async def listen_for_keys(
+        key_handlers: dict[str, KeyHandler],
+        stop_event: asyncio.Event,
+        timed_key_handlers: dict[str, TimedKeyHandler] | None = None,
+        timed_key_labels: dict[str, str] | None = None,
+) -> None:
     """
     Listen for single key commands in terminal
+    :param timed_key_labels: the legend-labels for each of the marker keys
     :param timed_key_handlers: handles keyboard input for extremity labels, recorded with a capture timestamp
     :param key_handlers: handles keyboard input, expects PromptInput as input
     :param stop_event: global event to stop listening/ cancel program
     :return: None
     """
     # output keyboard controls
-    print("Keyboard controls:")
+    print("⌨  Keyboard controls:")
     for key, val in key_handlers.items():
         print(f"{key}: {val.__name__}")
 
+    print("\n🏷  Controls for labeling extremities:")
     for key in timed_key_handlers or {}:
-        print(f"{key}: extremity marker")
+        label = (timed_key_labels or {}).get(key, "extremity marker")
+        print(f"{key}: {label}")
 
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)

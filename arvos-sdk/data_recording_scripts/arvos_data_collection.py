@@ -1103,23 +1103,12 @@ async def main() -> None:
             print(f"Marker {key} ignored: scheduled trial start as not arrived")
             return
 
-        print(
-            f"{extremity}: {new_state}"
-            f"at server_ns {pressed_ns}"
-        )
+        print(f"{extremity}: {new_state} at server_ns {pressed_ns}")
 
     timed_key_handlers: dict[str, TimedKeyHandler] = {
         key: partial(record_marker, key, extremity)
         for key, extremity in MARKER_KEYS.items()
     }
-
-    print(
-        "Marker mapping:",
-        ", ".join(
-            f"{key} = {extremity}"
-            for key, extremity in MARKER_KEYS.items()
-        ),
-    )
 
     server.on_imu = on_imu
     server.on_watch_activity = on_watch_activity
@@ -1148,7 +1137,16 @@ async def main() -> None:
     await upload_server.start()
 
     server_task = asyncio.create_task(server.start())
-    keyboard_task = asyncio.create_task(listen_for_keys(key_handlers, stop_event, timed_key_handlers))
+    keyboard_task = asyncio.create_task(
+        listen_for_keys(
+            key_handlers,
+            stop_event,
+            timed_key_handlers,
+            timed_key_labels = {
+                key: extremity.replace("_", " ")
+                for key, extremity in MARKER_KEYS.items()
+            },
+        ))
 
     try:
         await stop_event.wait()
