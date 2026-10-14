@@ -4,6 +4,7 @@ Python script to control data collection while climbing using arvos
 
 import asyncio
 from typing import Any
+from functools import partial
 
 from pathlib import Path
 from time import monotonic, monotonic_ns
@@ -19,13 +20,22 @@ from arvos import (
 from participant_metadata import ParticipantMetadataStore, TrialReservation
 from participant_profile import ParticipantProfile
 from recording_state import RecordingState
-from terminal_controls import PromptInput, listen_for_keys
+from terminal_controls import PromptInput, TimedKeyHandler, listen_for_keys
 from trial_output import TrialOutput
+from trial_labels import TrialLabels
 
 # Experiment settings
 TRIALS_PER_PARTICIPANT = 4
 RPE_MIN = 0
 RPE_MAX = 10
+
+# Keys for labeling extremities
+MARKER_KEYS = {
+    "f": "left_hand",
+    "k": "right_hand",
+    "v": "left_foot",
+    "m": "right_foot",
+}
 
 async def main() -> None:
     project_root = Path(__file__).resolve().parents[2]
@@ -66,6 +76,9 @@ async def main() -> None:
 
     active_trial: TrialOutput | None = None
     active_reservation: TrialReservation | None = None
+
+    active_labels: TrialLabels | None = None
+    label_write_failed = False
 
     debug_mode = False
     active_trial_roles: set [str] = set()
@@ -163,6 +176,7 @@ async def main() -> None:
     async def fail_active_trial(reason: str) -> None:
         nonlocal active_trial, active_reservation, active_upload_token
         nonlocal active_trial_roles, active_watch_expected
+        nonlocal active_labels
 
         state.recording = False
 
@@ -187,17 +201,25 @@ async def main() -> None:
             if isinstance(result, Exception):
                 print("Could not stop a trial client:", repr(result))
 
+        if active_labels is not None:
+            try:
+                active_labels.close()
+            except OSError as err:
+                print("Could not close labels.csv:", repr(err))
+
+            active_labels = None
+
         if active_trial is not None:
             try:
                 active_trial.close()
-            except Exception as error:
-                print("Failed to close trial files:", repr(error))
+            except Exception as err:
+                print("Failed to close trial files:", repr(err))
 
         if active_reservation is not None:
             try:
                 metadata_store.mark_trial_failed(active_reservation, reason)
-            except Exception as error:
-                print("Failed to update trial metadata:", repr(error))
+            except Exception as err:
+                print("Failed to update trial metadata:", repr(err))
 
         if active_upload_token is not None:
             upload_server.revoke(active_upload_token)
@@ -266,6 +288,7 @@ async def main() -> None:
         nonlocal pre_sync_result, post_sync_result, watch_drain_result
         nonlocal active_trial, active_reservation, active_upload_token
         nonlocal active_trial_roles, active_watch_expected
+        nonlocal active_labels, label_write_failed
 
         if not state.recording:
             participant_id = state.participant_id
@@ -308,13 +331,21 @@ async def main() -> None:
                     state.boulder_id,
                 )
 
+
                 active_trial = TrialOutput(
                     active_reservation.trial_directory,
                     active_reservation.trial_number,
                 )
-            except Exception as error:
-                active_trial_roles.clear()
-                print("Could not create trial output:", repr(error))
+
+                active_labels = TrialLabels(
+                    active_reservation.trial_directory,
+                    active_reservation.trial_number,
+                )
+
+                label_write_failed = False
+            except Exception as err:
+                print("Could not create trial output:", repr(err))
+                await fail_active_trial("trial_setup_failed")
                 return
 
             pre_sync_result = None
@@ -430,6 +461,11 @@ async def main() -> None:
 
             active_trial.begin_staging(staging_start_ns)
 
+            if active_labels is None:
+                raise RuntimeError("Trial has no label writer")
+
+            active_labels.arm(start_at_server_ns)
+
             start_commands = []
 
             if has_imu:
@@ -500,6 +536,10 @@ async def main() -> None:
             )
 
         await asyncio.gather(*capture_stop_commands)
+
+        if active_labels is not None:
+            active_labels.close()
+            active_labels = None
 
         capture_stop_waits = []
 
@@ -618,6 +658,12 @@ async def main() -> None:
             )
             
         summary = active_trial.finalize(staging_stop_ns)
+
+        summary["labels"] = {
+            "file": "labels.csv",
+            "status": ("write_failed" if label_write_failed else "ok"),
+            "labeling_ended_at_server_ns": trial_stop_requested_server_ns,
+        }
 
         summary["debug_mode"] = debug_mode
         summary["recorded_roles"] = sorted(active_trial_roles)
@@ -826,6 +872,17 @@ async def main() -> None:
             active_trial.trial_directory if active_trial else "none",
         )
 
+        if active_labels is not None:
+            print("Extremity marker states:")
+
+            for extremity, current_state in active_labels.states.items():
+                displayed_state = (current_state if current_state is not None else "awaiting_first_press")
+
+                print(f"{extremity}: {displayed_state}")
+
+            if label_write_failed:
+                print("Warning: at least one marker could not be saved")
+
     async def on_imu(data: IMUData) -> None:
         nonlocal last_sensor_arrival
 
@@ -981,6 +1038,43 @@ async def main() -> None:
     server.on_video_recording_armed = on_video_recording_armed
     server.on_video_capture_stopped = on_video_capture_stopped
 
+    def record_marker(key: str, extremity: str, pressed_ns: int) -> None:
+        nonlocal label_write_failed
+
+        if not state.recording or active_labels is None:
+            print(f"Marker {key} ignored: no active label window")
+            return
+
+        try:
+            new_state = active_labels.record(key, extremity, pressed_ns)
+        except (OSError, RuntimeError, ValueError) as err:
+            label_write_failed = True
+            print(f"Marker {key} was NOT saved: {err}")
+            return
+
+        if new_state is None:
+            print(f"Marker {key} ignored: scheduled trial start as not arrived")
+            return
+
+        print(
+            f"{extremity}: {new_state}"
+            f"at server_ns {pressed_ns}"
+        )
+
+    timed_key_handlers: dict[str, TimedKeyHandler] = {
+        key: partial(record_marker, key, extremity)
+        for key, extremity in MARKER_KEYS.items()
+    }
+
+    print(
+        "Marker mapping:",
+        ", ".join(
+            f"{key} = {extremity}"
+            for key, extremity in MARKER_KEYS.items()
+        ),
+    )
+
+
     key_handlers = {
         "q": quit_program,
         "r": start_stop_recording,
@@ -994,7 +1088,7 @@ async def main() -> None:
     await upload_server.start()
 
     server_task = asyncio.create_task(server.start())
-    keyboard_task = asyncio.create_task(listen_for_keys(key_handlers, stop_event))
+    keyboard_task = asyncio.create_task(listen_for_keys(key_handlers, stop_event, timed_key_handlers))
 
     try:
         await stop_event.wait()

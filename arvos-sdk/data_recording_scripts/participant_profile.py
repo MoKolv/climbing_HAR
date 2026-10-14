@@ -26,6 +26,7 @@ class ParticipantProfile:
         ParticipantField("climbing_experience", "Climbing experience (years)", int, minimum = 1),
         ParticipantField("climbing_frequency", "Climbing frequency (times/week)", int, minimum = 1),
         ParticipantField("climbing_competence", "Climbing competence (highest achieved grade)", str),
+        # height com
 
     )
 
