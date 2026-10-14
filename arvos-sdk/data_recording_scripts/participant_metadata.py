@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 
 def now_iso() -> str:
@@ -20,6 +20,10 @@ class TrialReservation:
     trial_directory: Path
     started_at: str
 
+class TrialMetadata(TypedDict):
+    watch_worn_on: str
+    rpe: int | None
+    rpe_scale: str
 
 class ParticipantMetadataStore:
     """ Owns Participant metadata and reserves one output dir per trial."""
@@ -125,23 +129,26 @@ class ParticipantMetadataStore:
             started_at=started_at,
         )
 
-    def set_trial_rpe(
-            self,
-            reservation: TrialReservation,
-            rpe: int | None,
-            scale: str,
-    ) -> None:
+    def set_trial_metadata(self, reservation: TrialReservation, fields: TrialMetadata) -> None:
+        if fields["watch_worn_on"] not in {
+            "left",
+            "right",
+            "not_worn"
+        }:
+            raise ValueError("watch_worn_on must be one of 'left', 'right', or 'not_worn'")
+
         metadata = self.load(reservation.participant_id)
         trial = self._find_trial(metadata, reservation.trial_number)
-        trial["rpe"] = rpe
-        trial["rpe_scale"] = scale
+
+        trial.update({
+            "watch_worn_on": fields["watch_worn_on"],
+            "rpe": fields["rpe"],
+            "rpe_scale": fields["rpe_scale"],
+        })
+
         self._write(reservation.participant_id, metadata)
 
-    def mark_trial_complete(
-            self,
-            reservation: TrialReservation,
-            summary: dict[str, Any],
-    ) -> None:
+    def mark_trial_complete(self, reservation: TrialReservation, summary: dict[str, Any]) -> None:
         metadata = self.load(reservation.participant_id)
         trial = self._find_trial(metadata, reservation.trial_number)
 
@@ -150,7 +157,7 @@ class ParticipantMetadataStore:
         trial["finished_at"] = now_iso()
 
         self._write(reservation.participant_id, metadata)
-
+        
     def mark_trial_failed(self, reservation: TrialReservation, reason: str) -> None:
         metadata = self.load(reservation.participant_id)
         trial = self._find_trial(metadata, reservation.trial_number)

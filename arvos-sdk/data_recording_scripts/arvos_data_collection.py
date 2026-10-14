@@ -17,7 +17,7 @@ from arvos import (
     IMUData,
     WatchMotionActivityData,
 )
-from participant_metadata import ParticipantMetadataStore, TrialReservation
+from participant_metadata import ParticipantMetadataStore, TrialMetadata, TrialReservation
 from participant_profile import ParticipantProfile
 from recording_state import RecordingState
 from terminal_controls import PromptInput, TimedKeyHandler, listen_for_keys
@@ -148,30 +148,69 @@ async def main() -> None:
 
                 metadata_store.update_participant(participant_id, {field.key: value})
                 break
-    async def prompt_trial_rpe(
-            prompt_input: PromptInput,
-            boulder_id: str | None,
-    ) -> int | None:
-        subject = f"boulder {boulder_id}" if boulder_id else "this trial"
+
+    async def prompt_trial_metadata(prompt_input: PromptInput, boulder_id: str | None ) -> TrialMetadata:
+        subject = (
+            f"boulder {boulder_id}"
+            if boulder_id
+            else "this_trial"
+        )
+
+        accepted_hands = {
+            "l": "left",
+            "left": "left",
+            "r": "right",
+            "right": "right",
+            "n": "not_worn",
+            "not_worn": "not_worn",
+            "not worn": "not_worn",
+        }
+
+        # require watch_placement
+        while True:
+            answer = await prompt_input(
+                "Watch worn on which hand?"
+                "[l=left, r=right, n=not_worn]"
+            )
+
+            watch_hand = accepted_hands.get(answer.strip().lower())
+
+            if watch_hand is not None:
+                break
+
+            print("Enter l, r, or n, then press Enter.")
+
+        # RPE optional
+        rpe: int | None = None
 
         while True:
             answer = await prompt_input(
-                f"RPE for {subject} ({RPE_MIN} - {RPE_MAX}, Enter to skip): ",
+                f"RPE for {subject} "
+                f"({RPE_MIN} - {RPE_MAX}, Enter to skip): "
             )
 
+            answer = answer.strip()
+
             if not answer:
-                return None
+                break
 
             try:
-                rpe = int(answer)
+                entered_rpe = int(answer)
             except ValueError:
-                print("Enter a whole number, or press Enter to skip")
+                print("Enter a whole number, or press Enter to skip.")
                 continue
 
-            if RPE_MIN <= rpe <= RPE_MAX:
-                return rpe
+            if RPE_MIN <= entered_rpe <= RPE_MAX:
+                rpe = entered_rpe
+                break
 
-            print(f"RPE Must be between{RPE_MIN} and {RPE_MAX}.")
+            print(f"RPE must be between {RPE_MIN} and {RPE_MAX}.")
+
+        return TrialMetadata(
+            watch_worn_on = watch_hand,
+            rpe = rpe,
+            rpe_scale= f"{RPE_MIN}-{RPE_MAX}",
+        )
 
     async def fail_active_trial(reason: str) -> None:
         nonlocal active_trial, active_reservation, active_upload_token
@@ -640,23 +679,20 @@ async def main() -> None:
                 "finalize_video_recording",
             )
 
-        rpe = await prompt_trial_rpe(prompt_input, state.boulder_id)
-
         reservation = active_reservation
         if reservation is None:
             raise RuntimeError("Trial has no metadata reservation")
 
-        metadata_store.set_trial_rpe(
-            reservation,
-            rpe,
-            f"{RPE_MIN} - {RPE_MAX}",
-        )
+        trial_metadata = await prompt_trial_metadata(prompt_input, state.boulder_id)
+
+        metadata_store.set_trial_metadata(reservation, trial_metadata
+                                          )
         if upload_token is not None:
             await upload_server.wait_for_trial_files(
                 upload_token,
                 timeout = 300.0,
             )
-            
+
         summary = active_trial.finalize(staging_stop_ns)
 
         summary["labels"] = {
@@ -812,31 +848,57 @@ async def main() -> None:
             else "❌ OFF - both phone roles required"
         )
 
-    async def end_watch_experiment_session(_: PromptInput) -> None:
+    async def request_watch_workout_end(*, timeout: float = 15.0, stop_capture: bool = False) -> bool:
         nonlocal watch_experiment_session_state
 
-        if state.recording or active_trial is not None:
-            print("Cannot end the watch workout session while a trial is active")
-
         if not server.has_role(IMU_WATCH_ROLE):
-            print("Cannot end watch workout session while IMU phone is not connected")
+            print("Cannot confirm end of watch workout session while IMU phone is not connected")
+            return False
 
-        watch_experiment_session_event.clear()
-        watch_experiment_session_state = "ending"
+        deadline = monotonic() + timeout
 
-        await server.send_command_to_role(IMU_WATCH_ROLE, "end_watch_experiment_session")
+        while monotonic() < deadline:
+            watch_experiment_session_event.clear()
+            watch_experiment_session_state = "ending"
 
-        try:
-            await asyncio.wait_for(watch_experiment_session_event.wait(), timeout=15.0)
-        except asyncio.TimeoutError:
-            watch_experiment_session_state = "unknown"
-            print("Timed out waiting for the watch workout session to end")
+            try:
+                if stop_capture:
+                    await server.send_command_to_role(IMU_WATCH_ROLE, "stop_streaming")
+
+                await server.send_command_to_role(IMU_WATCH_ROLE, "end_watch_experiment_session")
+
+            except Exception as err:
+                watch_experiment_session_state = "unknown"
+                print("Could not send watch shutdown request:", repr(err))
+                return False
+
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+
+            try:
+                await asyncio.wait_for(watch_experiment_session_event.wait(), timeout=min(5.0, remaining))
+            except asyncio.TimeoutError:
+                pass
+
+            if watch_experiment_session_state == "ended":
+                print("Watch workout session ended.")
+                return True
+            remaining = deadline - monotonic()
+            if remaining > 0:
+                await asyncio.sleep(min(1.0, remaining))
+
+        watch_experiment_session_state = "unknown"
+        print("Watch workout shutdown was not confirmed before the timeout.")
+
+        return False
+
+    async def end_watch_experiment_session(_: PromptInput) -> None:
+        if state.recording or active_trial is not None:
+            print("Stop the trial before ending the watch workout session.")
             return
 
-        if watch_experiment_session_state == "ended":
-            print("Watch workout session ended")
-        else:
-            print("Watch workout session end failed; state:", watch_experiment_session_state)
+        await request_watch_workout_end()
 
     async def status(_: PromptInput) -> None:
         def connection_message(device: str, connected: bool) -> str:
@@ -1023,21 +1085,6 @@ async def main() -> None:
         if role == VIDEO_ROLE:
             video_capture_stopped_event.set()
 
-
-    server.on_imu = on_imu
-    server.on_watch_activity = on_watch_activity
-    server.on_connect = on_connect
-    server.on_disconnect = on_disconnect
-    server.on_watch_sync_result = on_watch_sync_result
-    server.on_watch_stream_drained = on_watch_stream_drained
-    server.on_watch_experiment_session_state = on_watch_experiment_session_state
-    server.on_error = on_error
-    server.on_client_role = on_client_role
-    server.on_client_role_disconnect = on_client_role_disconnect
-    server.on_phone_clock_sync_result = on_phone_clock_sync_result
-    server.on_video_recording_armed = on_video_recording_armed
-    server.on_video_capture_stopped = on_video_capture_stopped
-
     def record_marker(key: str, extremity: str, pressed_ns: int) -> None:
         nonlocal label_write_failed
 
@@ -1074,6 +1121,19 @@ async def main() -> None:
         ),
     )
 
+    server.on_imu = on_imu
+    server.on_watch_activity = on_watch_activity
+    server.on_connect = on_connect
+    server.on_disconnect = on_disconnect
+    server.on_watch_sync_result = on_watch_sync_result
+    server.on_watch_stream_drained = on_watch_stream_drained
+    server.on_watch_experiment_session_state = on_watch_experiment_session_state
+    server.on_error = on_error
+    server.on_client_role = on_client_role
+    server.on_client_role_disconnect = on_client_role_disconnect
+    server.on_phone_clock_sync_result = on_phone_clock_sync_result
+    server.on_video_recording_armed = on_video_recording_armed
+    server.on_video_capture_stopped = on_video_capture_stopped
 
     key_handlers = {
         "q": quit_program,
@@ -1093,22 +1153,35 @@ async def main() -> None:
     try:
         await stop_event.wait()
     finally:
-        if active_trial is not None:
-            await fail_active_trial("program_stopped")
-
-        if watch_experiment_session_state == "running" and server.has_role(IMU_WATCH_ROLE):
-            watch_experiment_session_event.clear()
-
-            try:
-                await server.send_command_to_role(IMU_WATCH_ROLE, "end_watch_experiment_session")
-                await asyncio.wait_for(watch_experiment_session_event.wait(), timeout=5.0)
-            except Exception as error:
-                print("Could not end watch workout session during shutdown:", repr(error))
-
         keyboard_task.cancel()
-        server_task.cancel()
-        await asyncio.gather(server_task, keyboard_task, return_exceptions=True)
-        await upload_server.stop()
+        await asyncio.gather(keyboard_task, return_exceptions=True)
+
+        try:
+            wait_for_watch_drain = (
+                active_trial is not None
+                and active_watch_expected
+                and server.has_role(IMU_WATCH_ROLE)
+            )
+
+            if wait_for_watch_drain:
+                watch_drain_event.clear()
+
+            if active_trial is not None:
+                await fail_active_trial("program_stopped")
+
+            if wait_for_watch_drain:
+                try:
+                    await asyncio.wait_for(watch_drain_event.wait(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    print("Watch drain was not confirmed, continuing with with workout shutdown")
+
+            await request_watch_workout_end(timeout= 45.0, stop_capture=True)
+        finally:
+            server_task.cancel()
+            await asyncio.gather(server_task, return_exceptions=True)
+
+            await upload_server.stop()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
